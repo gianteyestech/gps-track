@@ -252,6 +252,49 @@ class TraccarApiService {
       body: JSON.stringify(command),
     });
   }
+
+  // Create Device (Add Tracker)
+  public async createDevice(device: Partial<Device>): Promise<Device> {
+    return this.request<Device>('/api/devices', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(device),
+    });
+  }
+
+  // Update Device
+  public async updateDevice(id: number, device: Partial<Device>): Promise<Device> {
+    return this.request<Device>(`/api/devices/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(device),
+    });
+  }
+
+  // Update User (e.g. Change Password)
+  public async updateUser(user: Partial<User> & { id: number; password?: string }): Promise<User> {
+    return this.request<User>(`/api/users/${user.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(user),
+    });
+  }
+
+  // Create Geofence
+  public async createGeofence(geofence: Partial<Geofence>): Promise<Geofence> {
+    return this.request<Geofence>('/api/geofences', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(geofence),
+    });
+  }
+
+  // Delete Geofence
+  public async deleteGeofence(id: number): Promise<void> {
+    return this.request<void>(`/api/geofences/${id}`, {
+      method: 'DELETE',
+    });
+  }
 }
 
 export const traccarApi = new TraccarApiService();

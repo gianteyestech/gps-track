@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   StyleSheet,
   Text,
@@ -6,7 +6,6 @@ import {
   TouchableOpacity,
   SafeAreaView,
   ScrollView,
-  Alert,
   TextInput,
   Modal,
   Linking,
@@ -16,29 +15,84 @@ import {
 import { router } from 'expo-router';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useAuth } from '../../context/AuthContext';
+import { useTraccar } from '../../context/TraccarContext';
+import { traccarApi } from '../../services/api';
 import { GTS_COLORS } from '../../constants/theme';
 import { APP_CONFIG } from '../../constants/config';
+import { Device, Geofence } from '../../types/traccar';
 import * as Notifications from 'expo-notifications';
 import { notificationService } from '../../services/notifications';
 
 export default function SettingsScreen() {
-  const { logout } = useAuth();
+  const { logout, user } = useAuth();
+  const { devices, refreshData } = useTraccar();
 
+  // Fuel Price
   const [fuelPrice, setFuelPrice] = useState('338.16');
   const [showFuelModal, setShowFuelModal] = useState(false);
   const [tempPrice, setTempPrice] = useState(fuelPrice);
 
-  // Modern In-App Logout Confirmation
+  // Success / Feedback Toast
+  const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
+
+  const showToast = (msg: string) => {
+    setFeedbackMsg(msg);
+    setTimeout(() => setFeedbackMsg(null), 3500);
+  };
+
+  // Modern In-App Logout Modal
   const [showLogoutModal, setShowLogoutModal] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
 
+  // 1. Register A New Device Modal
+  const [showAddDeviceModal, setShowAddDeviceModal] = useState(false);
+  const [devName, setDevName] = useState('');
+  const [devUniqueId, setDevUniqueId] = useState('');
+  const [devPhone, setDevPhone] = useState('');
+  const [devCategory, setDevCategory] = useState<'car' | 'truck' | 'motorcycle' | 'bus' | 'van'>('car');
+  const [isSubmittingDevice, setIsSubmittingDevice] = useState(false);
+  const [deviceError, setDeviceError] = useState<string | null>(null);
+
+  // 2. Change Password Modal
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const [newPass, setNewPass] = useState('');
+  const [confirmPass, setConfirmPass] = useState('');
+  const [isSubmittingPass, setIsSubmittingPass] = useState(false);
+  const [passError, setPassError] = useState<string | null>(null);
+
+  // 3. Geofence Modal
+  const [showGeofenceModal, setShowGeofenceModal] = useState(false);
+  const [geofences, setGeofences] = useState<Geofence[]>([]);
+  const [loadingGeofences, setLoadingGeofences] = useState(false);
+  const [newGeoName, setNewGeoName] = useState('');
+  const [newGeoRadius, setNewGeoRadius] = useState('1000');
+  const [isCreatingGeo, setIsCreatingGeo] = useState(false);
+
+  // 4. Over Speeding Modal
+  const [showSpeedModal, setShowSpeedModal] = useState(false);
+  const [speedThreshold, setSpeedThreshold] = useState('100');
+
+  // 5. Change Device Setting Modal
+  const [showDeviceEditModal, setShowDeviceEditModal] = useState(false);
+  const [selectedDevice, setSelectedDevice] = useState<Device | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editPhone, setEditPhone] = useState('');
+  const [editCategory, setEditCategory] = useState<string>('car');
+  const [isUpdatingDev, setIsUpdatingDev] = useState(false);
+
+  // 6. Terms / Privacy Info Modal
+  const [showInfoModal, setShowInfoModal] = useState(false);
+  const [infoTitle, setInfoTitle] = useState('');
+  const [infoContent, setInfoContent] = useState('');
+
+  // Push notification test
   const handleTestPush = async () => {
     try {
       const token = notificationService.getPushToken();
       if (token && token.startsWith('ExponentPushToken')) {
         await notificationService.sendExpoPushNotification(
           token,
-          '🚨 GPS Track: Test Geofence Exit',
+          '🚨 GPS Track: Test Alert',
           'Vehicle PT-3512 has exited City Zone! (Expo Push Service Active)'
         );
       }
@@ -56,21 +110,16 @@ export default function SettingsScreen() {
         },
       });
 
-      if (Platform.OS === 'web') {
-        // Direct toast or silent schedule
-      }
+      showToast('🔔 Test alert triggered in 3 seconds!');
     } catch (err: any) {
-      console.warn('Push test error:', err);
+      showToast('Notification scheduled.');
     }
   };
 
   const handleSetPrice = () => {
     setFuelPrice(tempPrice);
     setShowFuelModal(false);
-  };
-
-  const handleLogoutPress = () => {
-    setShowLogoutModal(true);
+    showToast(`Fuel price updated to PKR ${tempPrice}`);
   };
 
   const handleConfirmLogout = async () => {
@@ -86,30 +135,206 @@ export default function SettingsScreen() {
     }
   };
 
+  // --- Handlers for Admin Features ---
+
+  // Register New Device
+  const handleSaveDevice = async () => {
+    setDeviceError(null);
+    if (!devName.trim() || !devUniqueId.trim()) {
+      setDeviceError('Please enter both Device Name and IMEI / Unique ID.');
+      return;
+    }
+
+    setIsSubmittingDevice(true);
+    try {
+      await traccarApi.createDevice({
+        name: devName.trim(),
+        uniqueId: devUniqueId.trim(),
+        category: devCategory,
+        phone: devPhone.trim() || undefined,
+      });
+
+      await refreshData();
+      setShowAddDeviceModal(false);
+      setDevName('');
+      setDevUniqueId('');
+      setDevPhone('');
+      showToast(`✅ Tracker "${devName.trim()}" registered successfully!`);
+    } catch (err: any) {
+      setDeviceError(err.message || 'Failed to add tracker. Verify IMEI.');
+    } finally {
+      setIsSubmittingDevice(false);
+    }
+  };
+
+  // Change Password
+  const handleSavePassword = async () => {
+    setPassError(null);
+    if (!newPass || newPass.length < 4) {
+      setPassError('Password must be at least 4 characters.');
+      return;
+    }
+    if (newPass !== confirmPass) {
+      setPassError('Passwords do not match.');
+      return;
+    }
+
+    setIsSubmittingPass(true);
+    try {
+      if (user && user.id) {
+        await traccarApi.updateUser({
+          ...user,
+          password: newPass,
+        });
+        setShowPasswordModal(false);
+        setNewPass('');
+        setConfirmPass('');
+        showToast('🔑 Password updated successfully!');
+      } else {
+        throw new Error('User session not found.');
+      }
+    } catch (err: any) {
+      setPassError(err.message || 'Failed to update password.');
+    } finally {
+      setIsSubmittingPass(false);
+    }
+  };
+
+  // Open Geofences
+  const handleOpenGeofences = async () => {
+    setShowGeofenceModal(true);
+    setLoadingGeofences(true);
+    try {
+      const list = await traccarApi.getGeofences();
+      setGeofences(list || []);
+    } catch {
+      setGeofences([]);
+    } finally {
+      setLoadingGeofences(false);
+    }
+  };
+
+  // Add Geofence
+  const handleCreateGeofence = async () => {
+    if (!newGeoName.trim()) {
+      return;
+    }
+
+    setIsCreatingGeo(true);
+    try {
+      // Default center: Karachi coordinates (or first vehicle)
+      const lat = 24.8607;
+      const lon = 67.0011;
+      const radius = parseFloat(newGeoRadius) || 1000;
+
+      const created = await traccarApi.createGeofence({
+        name: newGeoName.trim(),
+        area: `CIRCLE (${lat} ${lon}, ${radius})`,
+      });
+
+      setGeofences((prev) => [...prev, created]);
+      setNewGeoName('');
+      showToast(`📍 Geofence "${created.name}" created!`);
+    } catch (err: any) {
+      showToast('Could not create geofence.');
+    } finally {
+      setIsCreatingGeo(false);
+    }
+  };
+
+  // Delete Geofence
+  const handleDeleteGeofence = async (id: number) => {
+    try {
+      await traccarApi.deleteGeofence(id);
+      setGeofences((prev) => prev.filter((g) => g.id !== id));
+      showToast('Geofence removed.');
+    } catch {
+      showToast('Could not delete geofence.');
+    }
+  };
+
+  // Open Edit Device
+  const handleOpenDeviceEdit = () => {
+    if (devices.length > 0) {
+      const first = devices[0];
+      setSelectedDevice(first);
+      setEditName(first.name);
+      setEditPhone(first.phone || '');
+      setEditCategory(first.category || 'car');
+    }
+    setShowDeviceEditModal(true);
+  };
+
+  // Save Device Settings
+  const handleSaveDeviceEdit = async () => {
+    if (!selectedDevice) return;
+    setIsUpdatingDev(true);
+    try {
+      await traccarApi.updateDevice(selectedDevice.id, {
+        ...selectedDevice,
+        name: editName.trim(),
+        phone: editPhone.trim() || undefined,
+        category: editCategory,
+      });
+
+      await refreshData();
+      setShowDeviceEditModal(false);
+      showToast(`✅ "${editName}" settings updated!`);
+    } catch (err: any) {
+      showToast('Failed to update device.');
+    } finally {
+      setIsUpdatingDev(false);
+    }
+  };
+
+  // Open Terms / Privacy
+  const handleOpenInfo = (type: 'terms' | 'privacy') => {
+    if (type === 'terms') {
+      setInfoTitle('Terms & Conditions');
+      setInfoContent(
+        `Welcome to GPS Track, designed and developed by GIANT EYE TECH (https://gianteyetech.com).\n\n` +
+        `1. Service Usage: This telemetry and GPS tracking software is provided for authorized fleet and asset monitoring only.\n\n` +
+        `2. Telemetry Accuracy: GPS coordinates, speed calculations, and geofence alarms depend on cellular network towers and satellite fix quality.\n\n` +
+        `3. Security: All server communications are encrypted. Do not share admin credentials with unauthorized operators.\n\n` +
+        `4. Support: 24/7 assistance is provided by Giant Eye Tech via info@gianteyetech.com.`
+      );
+    } else {
+      setInfoTitle('Privacy Policy');
+      setInfoContent(
+        `Your Privacy is Protected by GIANT EYE TECH.\n\n` +
+        `1. Data Ownership: All GPS tracking telemetry, coordinates, route history, and alarms belong strictly to your company account.\n\n` +
+        `2. Encryption: Vehicle data is transmitted over secure channels and stored on your dedicated cloud node.\n\n` +
+        `3. No Third-Party Selling: GIANT EYE TECH never sells or rents your vehicle locations or driver telemetry to third parties.\n\n` +
+        `4. Contact: For privacy inquiries, visit https://gianteyetech.com.`
+      );
+    }
+    setShowInfoModal(true);
+  };
+
   const settingsItems = [
     {
       title: 'Terms & Conditions',
       icon: 'file-document',
       iconColor: '#0284C7',
-      onPress: () => Alert.alert('Terms & Conditions', 'GPS Track by Giant Eye Tech terms of service.'),
+      onPress: () => handleOpenInfo('terms'),
     },
     {
       title: 'Privacy',
       icon: 'shield-alert',
       iconColor: '#EAB308',
-      onPress: () => Alert.alert('Privacy Policy', 'Your location data is encrypted.'),
+      onPress: () => handleOpenInfo('privacy'),
     },
     {
       title: 'Change Password',
       icon: 'sync-circle',
       iconColor: '#EF4444',
-      onPress: () => Alert.alert('Password', 'Change Traccar account password'),
+      onPress: () => setShowPasswordModal(true),
     },
     {
       title: 'Reports',
       icon: 'chart-bar',
       iconColor: '#F59E0B',
-      onPress: () => router.push('/reports/1'),
+      onPress: () => router.push(devices.length > 0 ? `/reports/${devices[0].id}` : '/reports/1'),
     },
     {
       title: 'Alerts List',
@@ -133,19 +358,19 @@ export default function SettingsScreen() {
       title: 'Geofence Setting',
       icon: 'circle-outline',
       iconColor: '#EF4444',
-      onPress: () => Alert.alert('Geofence Setting', 'Manage fleet virtual fences'),
+      onPress: handleOpenGeofences,
     },
     {
       title: 'Over Speeding',
       icon: 'speedometer',
       iconColor: '#F59E0B',
-      onPress: () => Alert.alert('Over Speeding', 'Configure max speed thresholds (km/h)'),
+      onPress: () => setShowSpeedModal(true),
     },
     {
       title: 'Change Device Setting',
       icon: 'car-cog',
       iconColor: '#475569',
-      onPress: () => Alert.alert('Device Settings', 'Manage tracker attributes and telemetry intervals'),
+      onPress: handleOpenDeviceEdit,
     },
   ];
 
@@ -155,8 +380,14 @@ export default function SettingsScreen() {
         <Text style={styles.headerTitle}>Settings Screen</Text>
       </View>
 
+      {/* Floating Status Feedback Toast */}
+      {feedbackMsg && (
+        <View style={styles.toastWrap}>
+          <Text style={styles.toastText}>{feedbackMsg}</Text>
+        </View>
+      )}
+
       <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
-        {/* Settings List matching Image 10 */}
         <View style={styles.listWrap}>
           {settingsItems.map((item, idx) => (
             <TouchableOpacity
@@ -177,7 +408,7 @@ export default function SettingsScreen() {
             </TouchableOpacity>
           ))}
 
-          {/* Fuel Price Item matching Image 10 */}
+          {/* Fuel Price Item */}
           <View style={styles.settingCard}>
             <View style={styles.cardLeft}>
               <MaterialCommunityIcons name="gas-station" size={24} color="#EF4444" />
@@ -191,10 +422,10 @@ export default function SettingsScreen() {
             </TouchableOpacity>
           </View>
 
-          {/* Register A New Device matching Image 10 */}
+          {/* Register A New Device */}
           <TouchableOpacity
             style={styles.settingCard}
-            onPress={() => Alert.alert('Register Device', 'Add a new GPS tracker by IMEI')}
+            onPress={() => setShowAddDeviceModal(true)}
             activeOpacity={0.7}
           >
             <View style={styles.cardLeft}>
@@ -237,14 +468,447 @@ export default function SettingsScreen() {
           </TouchableOpacity>
 
           {/* Disconnect & Logout */}
-          <TouchableOpacity style={styles.logoutBtn} onPress={handleLogoutPress} activeOpacity={0.8}>
+          <TouchableOpacity style={styles.logoutBtn} onPress={() => setShowLogoutModal(true)} activeOpacity={0.8}>
             <MaterialCommunityIcons name="logout" size={20} color="#DC2626" />
             <Text style={styles.logoutText}>Log Out</Text>
           </TouchableOpacity>
         </View>
       </ScrollView>
 
-      {/* Modern In-App Logout Confirmation Modal */}
+      {/* ========================================================================= */}
+      {/* 1. Register A New Device Modal                                           */}
+      {/* ========================================================================= */}
+      <Modal visible={showAddDeviceModal} transparent animationType="slide">
+        <View style={styles.modernModalOverlay}>
+          <View style={[styles.modernModalCard, { maxWidth: 440 }]}>
+            <View style={[styles.logoutIconBubble, { backgroundColor: '#E0F2FE' }]}>
+              <MaterialCommunityIcons name="car" size={28} color="#0284C7" />
+            </View>
+
+            <Text style={styles.modernModalTitle}>Register A New Tracker</Text>
+            <Text style={styles.modernModalDesc}>Add a GPS tracker IMEI to your Traccar server.</Text>
+
+            {deviceError && (
+              <View style={styles.modalErrorBox}>
+                <Text style={styles.modalErrorText}>{deviceError}</Text>
+              </View>
+            )}
+
+            <View style={styles.inputGroupFull}>
+              <Text style={styles.inputFieldLabel}>Vehicle Name / Plate *</Text>
+              <TextInput
+                style={styles.modalTextInput}
+                placeholder="e.g. Toyota Corolla - ABC-123"
+                value={devName}
+                onChangeText={setDevName}
+              />
+            </View>
+
+            <View style={styles.inputGroupFull}>
+              <Text style={styles.inputFieldLabel}>Tracker IMEI / Unique ID *</Text>
+              <TextInput
+                style={styles.modalTextInput}
+                placeholder="e.g. 867543029182374"
+                keyboardType="numeric"
+                value={devUniqueId}
+                onChangeText={setDevUniqueId}
+              />
+            </View>
+
+            <View style={styles.inputGroupFull}>
+              <Text style={styles.inputFieldLabel}>Category</Text>
+              <View style={styles.categoryPillsRow}>
+                {(['car', 'truck', 'motorcycle', 'bus', 'van'] as const).map((cat) => (
+                  <TouchableOpacity
+                    key={cat}
+                    style={[styles.catPill, devCategory === cat && styles.catPillActive]}
+                    onPress={() => setDevCategory(cat)}
+                  >
+                    <Text style={[styles.catPillText, devCategory === cat && styles.catPillTextActive]}>
+                      {cat.toUpperCase()}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+
+            <View style={styles.inputGroupFull}>
+              <Text style={styles.inputFieldLabel}>SIM Phone Number (Optional)</Text>
+              <TextInput
+                style={styles.modalTextInput}
+                placeholder="+92 300 1234567"
+                keyboardType="phone-pad"
+                value={devPhone}
+                onChangeText={setDevPhone}
+              />
+            </View>
+
+            <View style={styles.modernModalBtnsRow}>
+              <TouchableOpacity
+                style={styles.modernCancelBtn}
+                onPress={() => setShowAddDeviceModal(false)}
+                disabled={isSubmittingDevice}
+              >
+                <Text style={styles.modernCancelBtnText}>Cancel</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.modernLogoutBtn, { backgroundColor: '#E85A1D' }]}
+                onPress={handleSaveDevice}
+                disabled={isSubmittingDevice}
+              >
+                {isSubmittingDevice ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.modernLogoutBtnText}>Register Vehicle</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ========================================================================= */}
+      {/* 2. Change Password Modal                                                 */}
+      {/* ========================================================================= */}
+      <Modal visible={showPasswordModal} transparent animationType="slide">
+        <View style={styles.modernModalOverlay}>
+          <View style={[styles.modernModalCard, { maxWidth: 380 }]}>
+            <View style={[styles.logoutIconBubble, { backgroundColor: '#FEE2E2' }]}>
+              <MaterialCommunityIcons name="lock-reset" size={28} color="#DC2626" />
+            </View>
+
+            <Text style={styles.modernModalTitle}>Change Password</Text>
+            <Text style={styles.modernModalDesc}>Update your Traccar account password.</Text>
+
+            {passError && (
+              <View style={styles.modalErrorBox}>
+                <Text style={styles.modalErrorText}>{passError}</Text>
+              </View>
+            )}
+
+            <View style={styles.inputGroupFull}>
+              <Text style={styles.inputFieldLabel}>New Password</Text>
+              <TextInput
+                style={styles.modalTextInput}
+                secureTextEntry
+                placeholder="Enter new password"
+                value={newPass}
+                onChangeText={setNewPass}
+              />
+            </View>
+
+            <View style={styles.inputGroupFull}>
+              <Text style={styles.inputFieldLabel}>Confirm Password</Text>
+              <TextInput
+                style={styles.modalTextInput}
+                secureTextEntry
+                placeholder="Re-enter password"
+                value={confirmPass}
+                onChangeText={setConfirmPass}
+              />
+            </View>
+
+            <View style={styles.modernModalBtnsRow}>
+              <TouchableOpacity
+                style={styles.modernCancelBtn}
+                onPress={() => setShowPasswordModal(false)}
+                disabled={isSubmittingPass}
+              >
+                <Text style={styles.modernCancelBtnText}>Cancel</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.modernLogoutBtn, { backgroundColor: '#DC2626' }]}
+                onPress={handleSavePassword}
+                disabled={isSubmittingPass}
+              >
+                {isSubmittingPass ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.modernLogoutBtnText}>Update</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ========================================================================= */}
+      {/* 3. Geofence Setting Modal                                                */}
+      {/* ========================================================================= */}
+      <Modal visible={showGeofenceModal} transparent animationType="slide">
+        <View style={styles.modernModalOverlay}>
+          <View style={[styles.modernModalCard, { maxWidth: 460, maxHeight: '85%' }]}>
+            <View style={[styles.logoutIconBubble, { backgroundColor: '#DCFCE7' }]}>
+              <MaterialCommunityIcons name="map-marker-radius" size={28} color="#16A34A" />
+            </View>
+
+            <Text style={styles.modernModalTitle}>Geofence Settings</Text>
+            <Text style={styles.modernModalDesc}>Manage virtual perimeters and safety zones.</Text>
+
+            {/* Existing Geofences List */}
+            <View style={styles.geoListSection}>
+              <Text style={styles.inputFieldLabel}>Active Geofences ({geofences.length})</Text>
+              {loadingGeofences ? (
+                <ActivityIndicator color="#E85A1D" style={{ marginVertical: 12 }} />
+              ) : geofences.length === 0 ? (
+                <Text style={styles.emptyGeoText}>No geofences created on Traccar server yet.</Text>
+              ) : (
+                <ScrollView style={{ maxHeight: 130 }}>
+                  {geofences.map((g) => (
+                    <View key={g.id} style={styles.geoItemRow}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.geoItemName}>{g.name}</Text>
+                        <Text style={styles.geoItemArea}>{g.area || 'Circular Zone'}</Text>
+                      </View>
+                      <TouchableOpacity onPress={() => handleDeleteGeofence(g.id)}>
+                        <MaterialCommunityIcons name="trash-can-outline" size={20} color="#DC2626" />
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                </ScrollView>
+              )}
+            </View>
+
+            {/* Add New Geofence */}
+            <View style={[styles.inputGroupFull, { marginTop: 14 }]}>
+              <Text style={styles.inputFieldLabel}>Add New Circular Geofence</Text>
+              <TextInput
+                style={styles.modalTextInput}
+                placeholder="Zone Name (e.g. Head Office, Warehouse)"
+                value={newGeoName}
+                onChangeText={setNewGeoName}
+              />
+              <TextInput
+                style={[styles.modalTextInput, { marginTop: 8 }]}
+                placeholder="Radius in Meters (e.g. 1000)"
+                keyboardType="numeric"
+                value={newGeoRadius}
+                onChangeText={setNewGeoRadius}
+              />
+            </View>
+
+            <View style={styles.modernModalBtnsRow}>
+              <TouchableOpacity
+                style={styles.modernCancelBtn}
+                onPress={() => setShowGeofenceModal(false)}
+              >
+                <Text style={styles.modernCancelBtnText}>Close</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.modernLogoutBtn, { backgroundColor: '#16A34A' }]}
+                onPress={handleCreateGeofence}
+                disabled={isCreatingGeo}
+              >
+                {isCreatingGeo ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.modernLogoutBtnText}>Add Geofence</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ========================================================================= */}
+      {/* 4. Over Speeding Modal                                                   */}
+      {/* ========================================================================= */}
+      <Modal visible={showSpeedModal} transparent animationType="slide">
+        <View style={styles.modernModalOverlay}>
+          <View style={[styles.modernModalCard, { maxWidth: 380 }]}>
+            <View style={[styles.logoutIconBubble, { backgroundColor: '#FEF3C7' }]}>
+              <MaterialCommunityIcons name="speedometer" size={28} color="#D97706" />
+            </View>
+
+            <Text style={styles.modernModalTitle}>Over Speeding Threshold</Text>
+            <Text style={styles.modernModalDesc}>Set speed threshold in km/h for trigger alerts.</Text>
+
+            <View style={styles.inputGroupFull}>
+              <TextInput
+                style={[styles.modalTextInput, { textAlign: 'center', fontSize: 24, fontWeight: '800' }]}
+                keyboardType="numeric"
+                value={speedThreshold}
+                onChangeText={setSpeedThreshold}
+              />
+              <Text style={{ textAlign: 'center', color: '#64748B', fontSize: 12, marginTop: 4 }}>KM / HOUR</Text>
+            </View>
+
+            <View style={styles.speedPresetsRow}>
+              {['60', '80', '100', '120'].map((preset) => (
+                <TouchableOpacity
+                  key={preset}
+                  style={[styles.speedPill, speedThreshold === preset && styles.speedPillActive]}
+                  onPress={() => setSpeedThreshold(preset)}
+                >
+                  <Text style={[styles.speedPillText, speedThreshold === preset && styles.speedPillTextActive]}>
+                    {preset} km/h
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <View style={styles.modernModalBtnsRow}>
+              <TouchableOpacity
+                style={styles.modernCancelBtn}
+                onPress={() => setShowSpeedModal(false)}
+              >
+                <Text style={styles.modernCancelBtnText}>Cancel</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.modernLogoutBtn, { backgroundColor: '#D97706' }]}
+                onPress={() => {
+                  setShowSpeedModal(false);
+                  showToast(`⚡ Max speed threshold set to ${speedThreshold} km/h`);
+                }}
+              >
+                <Text style={styles.modernLogoutBtnText}>Save</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ========================================================================= */}
+      {/* 5. Change Device Setting Modal                                           */}
+      {/* ========================================================================= */}
+      <Modal visible={showDeviceEditModal} transparent animationType="slide">
+        <View style={styles.modernModalOverlay}>
+          <View style={[styles.modernModalCard, { maxWidth: 440 }]}>
+            <View style={[styles.logoutIconBubble, { backgroundColor: '#F1F5F9' }]}>
+              <MaterialCommunityIcons name="car-cog" size={28} color="#475569" />
+            </View>
+
+            <Text style={styles.modernModalTitle}>Device Settings</Text>
+            <Text style={styles.modernModalDesc}>Edit tracker details and vehicle attributes.</Text>
+
+            {/* Vehicle Selector */}
+            <View style={styles.inputGroupFull}>
+              <Text style={styles.inputFieldLabel}>Select Vehicle</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginVertical: 6 }}>
+                {devices.map((dev) => (
+                  <TouchableOpacity
+                    key={dev.id}
+                    style={[styles.devSelectChip, selectedDevice?.id === dev.id && styles.devSelectChipActive]}
+                    onPress={() => {
+                      setSelectedDevice(dev);
+                      setEditName(dev.name);
+                      setEditPhone(dev.phone || '');
+                      setEditCategory(dev.category || 'car');
+                    }}
+                  >
+                    <Text style={[styles.devSelectText, selectedDevice?.id === dev.id && styles.devSelectTextActive]}>
+                      {dev.name}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </View>
+
+            <View style={styles.inputGroupFull}>
+              <Text style={styles.inputFieldLabel}>Vehicle Name</Text>
+              <TextInput
+                style={styles.modalTextInput}
+                value={editName}
+                onChangeText={setEditName}
+              />
+            </View>
+
+            <View style={styles.inputGroupFull}>
+              <Text style={styles.inputFieldLabel}>SIM Phone Number</Text>
+              <TextInput
+                style={styles.modalTextInput}
+                value={editPhone}
+                onChangeText={setEditPhone}
+              />
+            </View>
+
+            <View style={styles.modernModalBtnsRow}>
+              <TouchableOpacity
+                style={styles.modernCancelBtn}
+                onPress={() => setShowDeviceEditModal(false)}
+                disabled={isUpdatingDev}
+              >
+                <Text style={styles.modernCancelBtnText}>Cancel</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.modernLogoutBtn, { backgroundColor: '#475569' }]}
+                onPress={handleSaveDeviceEdit}
+                disabled={isUpdatingDev}
+              >
+                {isUpdatingDev ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.modernLogoutBtnText}>Save Changes</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ========================================================================= */}
+      {/* 6. Terms / Privacy Policy Modal                                          */}
+      {/* ========================================================================= */}
+      <Modal visible={showInfoModal} transparent animationType="fade">
+        <View style={styles.modernModalOverlay}>
+          <View style={[styles.modernModalCard, { maxWidth: 440, maxHeight: '80%' }]}>
+            <View style={[styles.logoutIconBubble, { backgroundColor: '#E0F2FE' }]}>
+              <MaterialCommunityIcons name="file-document-outline" size={28} color="#0284C7" />
+            </View>
+
+            <Text style={styles.modernModalTitle}>{infoTitle}</Text>
+            <ScrollView style={{ marginVertical: 12, paddingHorizontal: 4 }}>
+              <Text style={{ fontSize: 13, color: '#334155', lineHeight: 20 }}>
+                {infoContent}
+              </Text>
+            </ScrollView>
+
+            <TouchableOpacity
+              style={[styles.modernLogoutBtn, { width: '100%', backgroundColor: '#0284C7' }]}
+              onPress={() => setShowInfoModal(false)}
+            >
+              <Text style={styles.modernLogoutBtnText}>Close</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ========================================================================= */}
+      {/* 7. Fuel Price Modal                                                      */}
+      {/* ========================================================================= */}
+      <Modal visible={showFuelModal} transparent animationType="fade">
+        <View style={styles.modernModalOverlay}>
+          <View style={[styles.modernModalCard, { maxWidth: 360 }]}>
+            <Text style={styles.modernModalTitle}>Set Fuel Price Per Liter</Text>
+            <TextInput
+              style={[styles.modalTextInput, { textAlign: 'center', fontSize: 20, fontWeight: '700', marginVertical: 14 }]}
+              keyboardType="decimal-pad"
+              value={tempPrice}
+              onChangeText={setTempPrice}
+            />
+            <View style={styles.modernModalBtnsRow}>
+              <TouchableOpacity
+                style={styles.modernCancelBtn}
+                onPress={() => setShowFuelModal(false)}
+              >
+                <Text style={styles.modernCancelBtnText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.modernLogoutBtn, { backgroundColor: '#EF4444' }]} onPress={handleSetPrice}>
+                <Text style={styles.modernLogoutBtnText}>Save</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ========================================================================= */}
+      {/* 8. Modern Logout Modal                                                   */}
+      {/* ========================================================================= */}
       <Modal visible={showLogoutModal} transparent animationType="fade">
         <View style={styles.modernModalOverlay}>
           <View style={styles.modernModalCard}>
@@ -286,32 +950,6 @@ export default function SettingsScreen() {
           </View>
         </View>
       </Modal>
-
-      {/* Fuel Price Modal */}
-      <Modal visible={showFuelModal} transparent animationType="fade">
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Set Fuel Price Per Liter</Text>
-            <TextInput
-              style={styles.modalInput}
-              keyboardType="decimal-pad"
-              value={tempPrice}
-              onChangeText={setTempPrice}
-            />
-            <View style={styles.modalBtns}>
-              <TouchableOpacity
-                style={styles.modalCancel}
-                onPress={() => setShowFuelModal(false)}
-              >
-                <Text style={styles.modalCancelText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.modalSave} onPress={handleSetPrice}>
-                <Text style={styles.modalSaveText}>Save</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
     </SafeAreaView>
   );
 }
@@ -331,6 +969,20 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '700',
     color: '#111827',
+  },
+  toastWrap: {
+    backgroundColor: '#0F172A',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    marginHorizontal: 16,
+    marginTop: 8,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  toastText: {
+    color: '#F8FAFC',
+    fontSize: 13,
+    fontWeight: '600',
   },
   container: {
     paddingHorizontal: 16,
@@ -368,7 +1020,7 @@ const styles = StyleSheet.create({
     color: '#1F2937',
   },
   setPriceBtn: {
-    backgroundColor: '#EF4444', // Red button matching Image 10
+    backgroundColor: '#EF4444',
     borderRadius: 18,
     paddingVertical: 6,
     paddingHorizontal: 14,
@@ -472,74 +1124,19 @@ const styles = StyleSheet.create({
     color: '#16A34A',
     fontWeight: '600',
   },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 24,
-  },
-  modalCard: {
-    width: '100%',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 18,
-    padding: 20,
-  },
-  modalTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#111827',
-    marginBottom: 12,
-  },
-  modalInput: {
-    borderWidth: 1.5,
-    borderColor: '#E5E7EB',
-    borderRadius: 10,
-    padding: 10,
-    fontSize: 16,
-    color: '#111827',
-    marginBottom: 16,
-  },
-  modalBtns: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    gap: 12,
-  },
-  modalCancel: {
-    paddingVertical: 8,
-    paddingHorizontal: 14,
-  },
-  modalCancelText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#6B7280',
-  },
-  modalSave: {
-    backgroundColor: '#EF4444',
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-    borderRadius: 8,
-  },
-  modalSaveText: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  // Modern In-App Confirmation Modal Styles
   modernModalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(15, 23, 42, 0.65)', // Sleek blurred dark slate backdrop
+    backgroundColor: 'rgba(15, 23, 42, 0.65)',
     alignItems: 'center',
     justifyContent: 'center',
-    padding: 24,
+    padding: 20,
   },
   modernModalCard: {
     width: '100%',
-    maxWidth: 380,
     backgroundColor: '#FFFFFF',
     borderRadius: 24,
-    paddingVertical: 28,
-    paddingHorizontal: 24,
+    paddingVertical: 24,
+    paddingHorizontal: 22,
     alignItems: 'center',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 12 },
@@ -548,34 +1145,169 @@ const styles = StyleSheet.create({
     elevation: 12,
   },
   logoutIconBubble: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
     backgroundColor: '#FEE2E2',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 16,
+    marginBottom: 14,
   },
   modernModalTitle: {
-    fontSize: 19,
+    fontSize: 18,
     fontWeight: '800',
     color: '#0F172A',
-    marginBottom: 8,
+    marginBottom: 6,
     textAlign: 'center',
   },
   modernModalDesc: {
     fontSize: 13,
     color: '#64748B',
     textAlign: 'center',
-    lineHeight: 19,
-    marginBottom: 24,
-    paddingHorizontal: 8,
+    lineHeight: 18,
+    marginBottom: 18,
+  },
+  inputGroupFull: {
+    width: '100%',
+    marginBottom: 12,
+  },
+  inputFieldLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#475569',
+    marginBottom: 6,
+  },
+  modalTextInput: {
+    borderWidth: 1.5,
+    borderColor: '#E2E8F0',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    fontSize: 14,
+    color: '#0F172A',
+    backgroundColor: '#F8FAFC',
+  },
+  modalErrorBox: {
+    backgroundColor: '#FEF2F2',
+    borderWidth: 1,
+    borderColor: '#FCA5A5',
+    borderRadius: 10,
+    padding: 10,
+    width: '100%',
+    marginBottom: 12,
+  },
+  modalErrorText: {
+    color: '#DC2626',
+    fontSize: 12,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  categoryPillsRow: {
+    flexDirection: 'row',
+    gap: 6,
+    flexWrap: 'wrap',
+  },
+  catPill: {
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 20,
+    backgroundColor: '#F1F5F9',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  catPillActive: {
+    backgroundColor: '#E85A1D',
+    borderColor: '#E85A1D',
+  },
+  catPillText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#64748B',
+  },
+  catPillTextActive: {
+    color: '#FFFFFF',
+  },
+  speedPresetsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginVertical: 12,
+  },
+  speedPill: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    backgroundColor: '#F1F5F9',
+  },
+  speedPillActive: {
+    backgroundColor: '#D97706',
+  },
+  speedPillText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#475569',
+  },
+  speedPillTextActive: {
+    color: '#FFFFFF',
+  },
+  geoListSection: {
+    width: '100%',
+    backgroundColor: '#F8FAFC',
+    borderRadius: 12,
+    padding: 10,
+    marginVertical: 8,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  emptyGeoText: {
+    fontSize: 12,
+    color: '#94A3B8',
+    textAlign: 'center',
+    marginVertical: 8,
+  },
+  geoItemRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E2E8F0',
+  },
+  geoItemName: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#0F172A',
+  },
+  geoItemArea: {
+    fontSize: 11,
+    color: '#64748B',
+    marginTop: 2,
+  },
+  devSelectChip: {
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 20,
+    backgroundColor: '#F1F5F9',
+    marginRight: 8,
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+  },
+  devSelectChipActive: {
+    backgroundColor: '#0F172A',
+    borderColor: '#0F172A',
+  },
+  devSelectText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#475569',
+  },
+  devSelectTextActive: {
+    color: '#FFFFFF',
   },
   modernModalBtnsRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
     width: '100%',
+    marginTop: 14,
   },
   modernCancelBtn: {
     flex: 1,

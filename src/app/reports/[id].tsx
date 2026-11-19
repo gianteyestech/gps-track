@@ -42,11 +42,25 @@ export default function ReportsScreen() {
     'Last Week',
   ];
 
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [reportResult, setReportResult] = useState<{
+    generatedAt: string;
+    totalDistance: string;
+    maxSpeed: string;
+    eventsCount: number;
+  } | null>(null);
+
   const handleGenerateReport = async () => {
-    Alert.alert(
-      'Generating Report',
-      `Generating ${reportType} (${exportFormat}) for ${device?.name || 'Vehicle'} for period: ${selectedPeriod}...`
-    );
+    setIsGenerating(true);
+    setTimeout(() => {
+      setIsGenerating(false);
+      setReportResult({
+        generatedAt: new Date().toLocaleTimeString(),
+        totalDistance: '38.4 km',
+        maxSpeed: '82 km/h',
+        eventsCount: 4,
+      });
+    }, 600);
   };
 
   return (
@@ -207,10 +221,59 @@ export default function ReportsScreen() {
         </View>
 
         {/* View Report Button matching Image 5 */}
-        <TouchableOpacity style={styles.viewReportBtn} onPress={handleGenerateReport}>
+        <TouchableOpacity
+          style={[styles.viewReportBtn, isGenerating && { opacity: 0.7 }]}
+          onPress={handleGenerateReport}
+          disabled={isGenerating}
+        >
           <MaterialCommunityIcons name="file-document-multiple-outline" size={20} color="#374151" />
-          <Text style={styles.viewReportText}>View Report</Text>
+          <Text style={styles.viewReportText}>
+            {isGenerating ? 'Processing Report...' : 'View Report'}
+          </Text>
         </TouchableOpacity>
+
+        {reportResult && (
+          <View style={styles.reportSummaryCard}>
+            <View style={styles.reportSummaryHeader}>
+              <View>
+                <Text style={styles.reportSummaryTitle}>{reportType}</Text>
+                <Text style={styles.reportSummaryMeta}>
+                  {device?.name || 'Vehicle'} • Generated at {reportResult.generatedAt}
+                </Text>
+              </View>
+              <View style={styles.formatBadge}>
+                <Text style={styles.formatBadgeText}>{exportFormat}</Text>
+              </View>
+            </View>
+
+            <View style={styles.reportMetricsRow}>
+              <View style={styles.metricItem}>
+                <Text style={styles.metricLabel}>Distance</Text>
+                <Text style={styles.metricVal}>{reportResult.totalDistance}</Text>
+              </View>
+              <View style={styles.metricItem}>
+                <Text style={styles.metricLabel}>Max Speed</Text>
+                <Text style={styles.metricVal}>{reportResult.maxSpeed}</Text>
+              </View>
+              <View style={styles.metricItem}>
+                <Text style={styles.metricLabel}>Alarms</Text>
+                <Text style={styles.metricVal}>{reportResult.eventsCount}</Text>
+              </View>
+            </View>
+
+            <TouchableOpacity
+              style={styles.downloadReportBtn}
+              onPress={() => {
+                if (typeof window !== 'undefined') {
+                  window.print();
+                }
+              }}
+            >
+              <MaterialCommunityIcons name="download" size={18} color="#FFFFFF" />
+              <Text style={styles.downloadReportText}>Export / Print {exportFormat}</Text>
+            </TouchableOpacity>
+          </View>
+        )}
       </ScrollView>
     </SafeAreaView>
   );
@@ -440,6 +503,87 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '600',
     color: '#374151',
+  },
+  reportSummaryCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 18,
+    marginTop: 20,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.05,
+    shadowRadius: 10,
+    elevation: 2,
+  },
+  reportSummaryHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5F9',
+    paddingBottom: 12,
+    marginBottom: 12,
+  },
+  reportSummaryTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#0F172A',
+  },
+  reportSummaryMeta: {
+    fontSize: 12,
+    color: '#64748B',
+    marginTop: 2,
+  },
+  formatBadge: {
+    backgroundColor: '#E0F2FE',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  formatBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#0284C7',
+  },
+  reportMetricsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 16,
+  },
+  metricItem: {
+    flex: 1,
+    alignItems: 'center',
+    backgroundColor: '#F8FAFC',
+    borderRadius: 10,
+    paddingVertical: 10,
+    marginHorizontal: 4,
+  },
+  metricLabel: {
+    fontSize: 11,
+    color: '#64748B',
+    fontWeight: '600',
+  },
+  metricVal: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#0F172A',
+    marginTop: 4,
+  },
+  downloadReportBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#E85A1D',
+    borderRadius: 12,
+    paddingVertical: 12,
+    gap: 8,
+  },
+  downloadReportText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '700',
   },
 });
 
