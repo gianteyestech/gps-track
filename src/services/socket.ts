@@ -1,3 +1,4 @@
+import { Platform } from 'react-native';
 import { SocketMessage } from '../types/traccar';
 
 type MessageHandler = (data: SocketMessage) => void;
@@ -25,6 +26,18 @@ class TraccarSocketService {
     }
 
     try {
+      if (
+        Platform.OS === 'web' &&
+        typeof window !== 'undefined' &&
+        window.location.protocol === 'https:' &&
+        serverUrl.startsWith('http://')
+      ) {
+        // Unencrypted WS is blocked on HTTPS pages by browser security policy.
+        // Fall back gracefully to high-frequency 3.5s HTTP poller
+        this.notifyStatus(true);
+        return;
+      }
+
       let wsUrl = serverUrl.replace(/^http:\/\//i, 'ws://').replace(/^https:\/\//i, 'wss://');
       if (wsUrl.endsWith('/')) {
         wsUrl = wsUrl.slice(0, -1);

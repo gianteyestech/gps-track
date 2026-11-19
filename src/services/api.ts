@@ -50,7 +50,7 @@ class TraccarApiService {
     return headers;
   }
 
-  private async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+  public resolveUrl(endpoint: string): string {
     let url = `${this.serverUrl}${endpoint.startsWith('/') ? endpoint : `/${endpoint}`}`;
 
     // On Web HTTPS (e.g. Vercel), route through Vercel proxy to avoid browser Mixed Content block
@@ -65,6 +65,12 @@ class TraccarApiService {
         ? cleanEndpoint.replace('/api', '/api/proxy')
         : `/api/proxy${cleanEndpoint}`;
     }
+
+    return url;
+  }
+
+  private async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+    const url = this.resolveUrl(endpoint);
     
     const headers = {
       ...this.getHeaders(),
@@ -123,7 +129,7 @@ class TraccarApiService {
       basicToken = 'Basic ' + btoa(`${email.trim()}:${password}`);
     } catch {}
 
-    const response = await fetch(`${this.serverUrl}/api/session`, {
+    const response = await fetch(this.resolveUrl('/api/session'), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
@@ -180,7 +186,7 @@ class TraccarApiService {
 
   public async getSessionToken(): Promise<string> {
     try {
-      const response = await fetch(`${this.serverUrl}/api/session/token`, {
+      const response = await fetch(this.resolveUrl('/api/session/token'), {
         method: 'POST',
         headers: this.getHeaders(),
       });

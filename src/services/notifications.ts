@@ -107,7 +107,7 @@ class NotificationService {
           notificationTokens: tokenList.join(','),
         };
 
-        await fetch(`${traccarApi.getServerUrl()}/api/users/${user.id}`, {
+        await fetch(traccarApi.resolveUrl(`/api/users/${user.id}`), {
           method: 'PUT',
           headers: {
             'Content-Type': 'application/json',
