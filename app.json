@@ -1,15 +1,18 @@
 {
   "expo": {
-    "name": "get-track",
-    "slug": "get-track",
+    "name": "GPS Track",
+    "slug": "gps-track",
+    "scheme": "gpstrack",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.gianteyetech.gpstrack"
     },
     "android": {
+      "package": "com.gianteyetech.gpstrack",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -20,6 +23,18 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "plugins": [
+      "expo-router",
+      "expo-font",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#E85A1D",
+          "sounds": []
+        }
+      ]
+    ]
   }
 }
