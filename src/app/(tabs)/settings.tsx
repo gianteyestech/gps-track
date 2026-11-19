@@ -10,6 +10,7 @@ import {
   TextInput,
   Modal,
   Linking,
+  Platform,
 } from 'react-native';
 import { router } from 'expo-router';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -27,40 +28,50 @@ export default function SettingsScreen() {
   const [tempPrice, setTempPrice] = useState(fuelPrice);
 
   const handleTestPush = async () => {
+    const runTest = async () => {
+      try {
+        const token = notificationService.getPushToken();
+        if (token && token.startsWith('ExponentPushToken')) {
+          await notificationService.sendExpoPushNotification(
+            token,
+            '🚨 GPS Track: Test Geofence Exit',
+            'Vehicle PT-3512 has exited City Zone! (Expo Push Service Active)'
+          );
+        }
+
+        // Also schedule local OS trigger in 3 seconds
+        await Notifications.scheduleNotificationAsync({
+          content: {
+            title: '🚨 GPS Track: Geofence Alert',
+            body: 'Vehicle PT-3512 exited designated geofence! Tap to track live.',
+            sound: 'default',
+            priority: Notifications.AndroidNotificationPriority.MAX,
+          },
+          trigger: {
+            type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
+            seconds: 3,
+          },
+        });
+      } catch (err: any) {
+        Alert.alert('Notification Test', 'Alert scheduled. Please check your notification tray.');
+      }
+    };
+
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      const confirmed = window.confirm('A test notification will trigger in 3 seconds. Lock your phone or minimize the app to see it!');
+      if (confirmed) {
+        await runTest();
+      }
+      return;
+    }
+
     Alert.alert(
       'Test Push Notification',
       'A test notification will trigger in 3 seconds. Lock your phone or minimize the app to see the lock-screen banner!',
       [
         {
           text: 'Send Test Alert',
-          onPress: async () => {
-            try {
-              const token = notificationService.getPushToken();
-              if (token && token.startsWith('ExponentPushToken')) {
-                await notificationService.sendExpoPushNotification(
-                  token,
-                  '🚨 GPS Track: Test Geofence Exit',
-                  'Vehicle PT-3512 has exited City Zone! (Expo Push Service Active)'
-                );
-              }
-
-              // Also schedule local OS trigger in 3 seconds
-              await Notifications.scheduleNotificationAsync({
-                content: {
-                  title: '🚨 GPS Track: Geofence Alert',
-                  body: 'Vehicle PT-3512 exited designated geofence! Tap to track live.',
-                  sound: 'default',
-                  priority: Notifications.AndroidNotificationPriority.MAX,
-                },
-                trigger: {
-                  type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
-                  seconds: 3,
-                },
-              });
-            } catch (err: any) {
-              Alert.alert('Notification Test', 'Alert scheduled. Please check your notification tray.');
-            }
-          },
+          onPress: runTest,
         },
         { text: 'Cancel', style: 'cancel' },
       ]
@@ -73,19 +84,33 @@ export default function SettingsScreen() {
     Alert.alert('Updated', `Fuel price set to: ${tempPrice}`);
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    const doLogout = async () => {
+      try {
+        await logout();
+      } catch (e) {
+        console.warn('Logout error:', e);
+      }
+      router.replace('/(auth)/login');
+    };
+
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      const confirmed = window.confirm('Are you sure you want to log out from GPS Track?');
+      if (confirmed) {
+        await doLogout();
+      }
+      return;
+    }
+
     Alert.alert(
-      'Disconnect Server',
-      'Are you sure you want to log out from Traccar?',
+      'Log Out',
+      'Are you sure you want to log out from GPS Track?',
       [
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Log Out',
           style: 'destructive',
-          onPress: async () => {
-            await logout();
-            router.replace('/(auth)/login');
-          },
+          onPress: doLogout,
         },
       ]
     );
