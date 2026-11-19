@@ -11,6 +11,7 @@ import {
   Modal,
   Linking,
   Platform,
+  ActivityIndicator,
 } from 'react-native';
 import { router } from 'expo-router';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -27,93 +28,62 @@ export default function SettingsScreen() {
   const [showFuelModal, setShowFuelModal] = useState(false);
   const [tempPrice, setTempPrice] = useState(fuelPrice);
 
+  // Modern In-App Logout Confirmation
+  const [showLogoutModal, setShowLogoutModal] = useState(false);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
+
   const handleTestPush = async () => {
-    const runTest = async () => {
-      try {
-        const token = notificationService.getPushToken();
-        if (token && token.startsWith('ExponentPushToken')) {
-          await notificationService.sendExpoPushNotification(
-            token,
-            '🚨 GPS Track: Test Geofence Exit',
-            'Vehicle PT-3512 has exited City Zone! (Expo Push Service Active)'
-          );
-        }
-
-        // Also schedule local OS trigger in 3 seconds
-        await Notifications.scheduleNotificationAsync({
-          content: {
-            title: '🚨 GPS Track: Geofence Alert',
-            body: 'Vehicle PT-3512 exited designated geofence! Tap to track live.',
-            sound: 'default',
-            priority: Notifications.AndroidNotificationPriority.MAX,
-          },
-          trigger: {
-            type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
-            seconds: 3,
-          },
-        });
-      } catch (err: any) {
-        Alert.alert('Notification Test', 'Alert scheduled. Please check your notification tray.');
+    try {
+      const token = notificationService.getPushToken();
+      if (token && token.startsWith('ExponentPushToken')) {
+        await notificationService.sendExpoPushNotification(
+          token,
+          '🚨 GPS Track: Test Geofence Exit',
+          'Vehicle PT-3512 has exited City Zone! (Expo Push Service Active)'
+        );
       }
-    };
 
-    if (Platform.OS === 'web' && typeof window !== 'undefined') {
-      const confirmed = window.confirm('A test notification will trigger in 3 seconds. Lock your phone or minimize the app to see it!');
-      if (confirmed) {
-        await runTest();
-      }
-      return;
-    }
-
-    Alert.alert(
-      'Test Push Notification',
-      'A test notification will trigger in 3 seconds. Lock your phone or minimize the app to see the lock-screen banner!',
-      [
-        {
-          text: 'Send Test Alert',
-          onPress: runTest,
+      await Notifications.scheduleNotificationAsync({
+        content: {
+          title: '🚨 GPS Track: Geofence Alert',
+          body: 'Vehicle PT-3512 exited designated geofence! Tap to track live.',
+          sound: 'default',
+          priority: Notifications.AndroidNotificationPriority.MAX,
         },
-        { text: 'Cancel', style: 'cancel' },
-      ]
-    );
+        trigger: {
+          type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
+          seconds: 3,
+        },
+      });
+
+      if (Platform.OS === 'web') {
+        // Direct toast or silent schedule
+      }
+    } catch (err: any) {
+      console.warn('Push test error:', err);
+    }
   };
 
   const handleSetPrice = () => {
     setFuelPrice(tempPrice);
     setShowFuelModal(false);
-    Alert.alert('Updated', `Fuel price set to: ${tempPrice}`);
   };
 
-  const handleLogout = async () => {
-    const doLogout = async () => {
-      try {
-        await logout();
-      } catch (e) {
-        console.warn('Logout error:', e);
-      }
+  const handleLogoutPress = () => {
+    setShowLogoutModal(true);
+  };
+
+  const handleConfirmLogout = async () => {
+    setIsLoggingOut(true);
+    try {
+      await logout();
+    } catch (e) {
+      console.warn('Logout error:', e);
+    } finally {
+      setIsLoggingOut(false);
+      setShowLogoutModal(false);
       router.replace('/(auth)/login');
-    };
-
-    if (Platform.OS === 'web' && typeof window !== 'undefined') {
-      const confirmed = window.confirm('Are you sure you want to log out from GPS Track?');
-      if (confirmed) {
-        await doLogout();
-      }
-      return;
     }
-
-    Alert.alert(
-      'Log Out',
-      'Are you sure you want to log out from GPS Track?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Log Out',
-          style: 'destructive',
-          onPress: doLogout,
-        },
-      ]
-    );
   };
 
   const settingsItems = [
@@ -267,12 +237,55 @@ export default function SettingsScreen() {
           </TouchableOpacity>
 
           {/* Disconnect & Logout */}
-          <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout}>
+          <TouchableOpacity style={styles.logoutBtn} onPress={handleLogoutPress} activeOpacity={0.8}>
             <MaterialCommunityIcons name="logout" size={20} color="#DC2626" />
             <Text style={styles.logoutText}>Log Out</Text>
           </TouchableOpacity>
         </View>
       </ScrollView>
+
+      {/* Modern In-App Logout Confirmation Modal */}
+      <Modal visible={showLogoutModal} transparent animationType="fade">
+        <View style={styles.modernModalOverlay}>
+          <View style={styles.modernModalCard}>
+            <View style={styles.logoutIconBubble}>
+              <MaterialCommunityIcons name="logout-variant" size={28} color="#DC2626" />
+            </View>
+
+            <Text style={styles.modernModalTitle}>Log Out</Text>
+            <Text style={styles.modernModalDesc}>
+              Are you sure you want to end your active GPS Track monitoring session?
+            </Text>
+
+            <View style={styles.modernModalBtnsRow}>
+              <TouchableOpacity
+                style={styles.modernCancelBtn}
+                onPress={() => setShowLogoutModal(false)}
+                activeOpacity={0.7}
+                disabled={isLoggingOut}
+              >
+                <Text style={styles.modernCancelBtnText}>Cancel</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.modernLogoutBtn}
+                onPress={handleConfirmLogout}
+                activeOpacity={0.85}
+                disabled={isLoggingOut}
+              >
+                {isLoggingOut ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <>
+                    <MaterialCommunityIcons name="logout" size={16} color="#FFFFFF" />
+                    <Text style={styles.modernLogoutBtnText}>Log Out</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       {/* Fuel Price Modal */}
       <Modal visible={showFuelModal} transparent animationType="fade">
@@ -511,5 +524,90 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 14,
     fontWeight: '700',
+  },
+  // Modern In-App Confirmation Modal Styles
+  modernModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.65)', // Sleek blurred dark slate backdrop
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  modernModalCard: {
+    width: '100%',
+    maxWidth: 380,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 24,
+    paddingVertical: 28,
+    paddingHorizontal: 24,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.25,
+    shadowRadius: 20,
+    elevation: 12,
+  },
+  logoutIconBubble: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: '#FEE2E2',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
+  },
+  modernModalTitle: {
+    fontSize: 19,
+    fontWeight: '800',
+    color: '#0F172A',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  modernModalDesc: {
+    fontSize: 13,
+    color: '#64748B',
+    textAlign: 'center',
+    lineHeight: 19,
+    marginBottom: 24,
+    paddingHorizontal: 8,
+  },
+  modernModalBtnsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    width: '100%',
+  },
+  modernCancelBtn: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 14,
+    backgroundColor: '#F1F5F9',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modernCancelBtnText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#475569',
+  },
+  modernLogoutBtn: {
+    flex: 1.2,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 12,
+    borderRadius: 14,
+    backgroundColor: '#DC2626',
+    shadowColor: '#DC2626',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  modernLogoutBtnText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#FFFFFF',
   },
 });
