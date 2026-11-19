@@ -23,6 +23,55 @@ import { Device, Geofence } from '../../types/traccar';
 import * as Notifications from 'expo-notifications';
 import { notificationService } from '../../services/notifications';
 
+const parseGeofenceDetails = (area?: string) => {
+  if (!area) {
+    return {
+      type: 'Boundary Zone',
+      detail: 'Virtual safety perimeter',
+      icon: 'map-marker-radius' as const,
+      color: '#10B981',
+      bg: '#DCFCE7',
+    };
+  }
+
+  const trimmed = area.trim().toUpperCase();
+  if (trimmed.startsWith('CIRCLE')) {
+    const match = area.match(/,\s*([0-9.]+)\)/);
+    const radiusMeters = match ? parseFloat(match[1]) : 1000;
+    const formattedRadius =
+      radiusMeters >= 1000
+        ? `${(radiusMeters / 1000).toFixed(1)} km`
+        : `${Math.round(radiusMeters)} m`;
+    return {
+      type: 'Circular Zone',
+      detail: `Radius: ${formattedRadius}`,
+      icon: 'circle-outline' as const,
+      color: '#0284C7',
+      bg: '#E0F2FE',
+    };
+  }
+
+  if (trimmed.startsWith('POLYGON')) {
+    const coordsMatch = area.match(/([0-9.-]+\s+[0-9.-]+)/g);
+    const count = coordsMatch ? coordsMatch.length : 0;
+    return {
+      type: 'Polygon Perimeter',
+      detail: count > 0 ? `${count} GPS boundary vertices` : 'Custom boundary',
+      icon: 'vector-polygon' as const,
+      color: '#8B5CF6',
+      bg: '#EDE9FE',
+    };
+  }
+
+  return {
+    type: 'Safety Zone',
+    detail: 'Virtual perimeter',
+    icon: 'map-marker-radius' as const,
+    color: '#059669',
+    bg: '#D1FAE5',
+  };
+};
+
 export default function SettingsScreen() {
   const { logout, user } = useAuth();
   const { devices, refreshData } = useTraccar();
@@ -639,76 +688,145 @@ export default function SettingsScreen() {
       {/* ========================================================================= */}
       <Modal visible={showGeofenceModal} transparent animationType="slide">
         <View style={styles.modernModalOverlay}>
-          <View style={[styles.modernModalCard, { maxWidth: 460, maxHeight: '85%' }]}>
-            <View style={[styles.logoutIconBubble, { backgroundColor: '#DCFCE7' }]}>
-              <MaterialCommunityIcons name="map-marker-radius" size={28} color="#16A34A" />
-            </View>
-
-            <Text style={styles.modernModalTitle}>Geofence Settings</Text>
-            <Text style={styles.modernModalDesc}>Manage virtual perimeters and safety zones.</Text>
-
-            {/* Existing Geofences List */}
-            <View style={styles.geoListSection}>
-              <Text style={styles.inputFieldLabel}>Active Geofences ({geofences.length})</Text>
-              {loadingGeofences ? (
-                <ActivityIndicator color="#E85A1D" style={{ marginVertical: 12 }} />
-              ) : geofences.length === 0 ? (
-                <Text style={styles.emptyGeoText}>No geofences created on Traccar server yet.</Text>
-              ) : (
-                <ScrollView style={{ maxHeight: 130 }}>
-                  {geofences.map((g) => (
-                    <View key={g.id} style={styles.geoItemRow}>
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.geoItemName}>{g.name}</Text>
-                        <Text style={styles.geoItemArea}>{g.area || 'Circular Zone'}</Text>
-                      </View>
-                      <TouchableOpacity onPress={() => handleDeleteGeofence(g.id)}>
-                        <MaterialCommunityIcons name="trash-can-outline" size={20} color="#DC2626" />
-                      </TouchableOpacity>
-                    </View>
-                  ))}
-                </ScrollView>
-              )}
-            </View>
-
-            {/* Add New Geofence */}
-            <View style={[styles.inputGroupFull, { marginTop: 14 }]}>
-              <Text style={styles.inputFieldLabel}>Add New Circular Geofence</Text>
-              <TextInput
-                style={styles.modalTextInput}
-                placeholder="Zone Name (e.g. Head Office, Warehouse)"
-                value={newGeoName}
-                onChangeText={setNewGeoName}
-              />
-              <TextInput
-                style={[styles.modalTextInput, { marginTop: 8 }]}
-                placeholder="Radius in Meters (e.g. 1000)"
-                keyboardType="numeric"
-                value={newGeoRadius}
-                onChangeText={setNewGeoRadius}
-              />
-            </View>
-
-            <View style={styles.modernModalBtnsRow}>
+          <View style={[styles.modernModalCard, { maxWidth: 480, maxHeight: '90%' }]}>
+            {/* Modal Header */}
+            <View style={styles.geoModalHeader}>
+              <View style={[styles.logoutIconBubble, { backgroundColor: '#DCFCE7', marginBottom: 0 }]}>
+                <MaterialCommunityIcons name="map-marker-radius" size={26} color="#16A34A" />
+              </View>
+              <View style={{ flex: 1, marginLeft: 12 }}>
+                <Text style={styles.modernModalTitle}>Geofence Settings</Text>
+                <Text style={styles.modernModalDesc}>Virtual perimeters & safe zones</Text>
+              </View>
               <TouchableOpacity
-                style={styles.modernCancelBtn}
+                style={styles.closeIconBtn}
                 onPress={() => setShowGeofenceModal(false)}
               >
-                <Text style={styles.modernCancelBtnText}>Close</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.modernLogoutBtn, { backgroundColor: '#16A34A' }]}
-                onPress={handleCreateGeofence}
-                disabled={isCreatingGeo}
-              >
-                {isCreatingGeo ? (
-                  <ActivityIndicator size="small" color="#FFFFFF" />
-                ) : (
-                  <Text style={styles.modernLogoutBtnText}>Add Geofence</Text>
-                )}
+                <MaterialCommunityIcons name="close" size={22} color="#64748B" />
               </TouchableOpacity>
             </View>
+
+            <ScrollView style={{ width: '100%' }} showsVerticalScrollIndicator={false}>
+              {/* Existing Geofences List */}
+              <View style={styles.geoSectionCard}>
+                <View style={styles.geoSectionHeader}>
+                  <Text style={styles.geoSectionTitle}>Active Zones</Text>
+                  <View style={styles.geoCountBadge}>
+                    <Text style={styles.geoCountText}>{geofences.length}</Text>
+                  </View>
+                </View>
+
+                {loadingGeofences ? (
+                  <ActivityIndicator color="#E85A1D" style={{ marginVertical: 20 }} />
+                ) : geofences.length === 0 ? (
+                  <View style={styles.emptyGeoWrap}>
+                    <MaterialCommunityIcons name="map-marker-off" size={32} color="#CBD5E1" />
+                    <Text style={styles.emptyGeoText}>No geofences created on server yet.</Text>
+                  </View>
+                ) : (
+                  <View style={styles.geoListScrollBox}>
+                    {geofences.map((g) => {
+                      const info = parseGeofenceDetails(g.area);
+                      return (
+                        <View key={g.id} style={styles.geoItemCard}>
+                          <View style={[styles.geoItemIconBubble, { backgroundColor: info.bg }]}>
+                            <MaterialCommunityIcons name={info.icon as any} size={18} color={info.color} />
+                          </View>
+                          <View style={{ flex: 1, paddingHorizontal: 10 }}>
+                            <View style={styles.geoNameRow}>
+                              <Text style={styles.geoItemName} numberOfLines={1}>
+                                {g.name}
+                              </Text>
+                              <View style={[styles.geoTypePill, { backgroundColor: info.bg }]}>
+                                <Text style={[styles.geoTypePillText, { color: info.color }]}>
+                                  {info.type}
+                                </Text>
+                              </View>
+                            </View>
+                            <Text style={styles.geoItemDetail}>{info.detail}</Text>
+                          </View>
+                          <TouchableOpacity
+                            style={styles.geoDeleteBtn}
+                            onPress={() => handleDeleteGeofence(g.id)}
+                            activeOpacity={0.7}
+                          >
+                            <MaterialCommunityIcons name="trash-can-outline" size={18} color="#EF4444" />
+                          </TouchableOpacity>
+                        </View>
+                      );
+                    })}
+                  </View>
+                )}
+              </View>
+
+              {/* Add New Circular Geofence Section */}
+              <View style={[styles.geoSectionCard, { marginTop: 14 }]}>
+                <Text style={styles.geoSectionTitle}>Add New Circular Zone</Text>
+                <Text style={styles.geoSectionSub}>Create an instant circular safety perimeter.</Text>
+
+                <View style={{ marginTop: 10 }}>
+                  <Text style={styles.inputFieldLabel}>Zone Name *</Text>
+                  <TextInput
+                    style={styles.modalTextInput}
+                    placeholder="e.g. Head Office, Warehouse, Port"
+                    value={newGeoName}
+                    onChangeText={setNewGeoName}
+                  />
+                </View>
+
+                {/* Quick Radius Presets */}
+                <View style={{ marginTop: 12 }}>
+                  <Text style={styles.inputFieldLabel}>Radius Preset</Text>
+                  <View style={styles.radiusPillsRow}>
+                    {[
+                      { label: '500 m', value: '500' },
+                      { label: '1.0 km', value: '1000' },
+                      { label: '2.0 km', value: '2000' },
+                      { label: '5.0 km', value: '5000' },
+                    ].map((preset) => {
+                      const isActive = newGeoRadius === preset.value;
+                      return (
+                        <TouchableOpacity
+                          key={preset.value}
+                          style={[styles.radiusPill, isActive && styles.radiusPillActive]}
+                          onPress={() => setNewGeoRadius(preset.value)}
+                        >
+                          <Text style={[styles.radiusPillText, isActive && styles.radiusPillTextActive]}>
+                            {preset.label}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                </View>
+
+                <View style={{ marginTop: 10 }}>
+                  <Text style={styles.inputFieldLabel}>Custom Radius (Meters)</Text>
+                  <TextInput
+                    style={styles.modalTextInput}
+                    placeholder="e.g. 1500"
+                    keyboardType="numeric"
+                    value={newGeoRadius}
+                    onChangeText={setNewGeoRadius}
+                  />
+                </View>
+
+                <TouchableOpacity
+                  style={[styles.createGeoBtn, { marginTop: 16 }]}
+                  onPress={handleCreateGeofence}
+                  disabled={isCreatingGeo}
+                >
+                  {isCreatingGeo ? (
+                    <ActivityIndicator size="small" color="#FFFFFF" />
+                  ) : (
+                    <>
+                      <MaterialCommunityIcons name="plus-circle" size={18} color="#FFFFFF" />
+                      <Text style={styles.createGeoBtnText}>Create Geofence Zone</Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
           </View>
         </View>
       </Modal>
@@ -1249,37 +1367,165 @@ const styles = StyleSheet.create({
   speedPillTextActive: {
     color: '#FFFFFF',
   },
-  geoListSection: {
+  geoModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    width: '100%',
+    marginBottom: 16,
+  },
+  closeIconBtn: {
+    padding: 6,
+    borderRadius: 8,
+    backgroundColor: '#F1F5F9',
+  },
+  geoSectionCard: {
     width: '100%',
     backgroundColor: '#F8FAFC',
-    borderRadius: 12,
-    padding: 10,
-    marginVertical: 8,
+    borderRadius: 16,
+    padding: 14,
     borderWidth: 1,
     borderColor: '#E2E8F0',
+  },
+  geoSectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  geoSectionTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#0F172A',
+  },
+  geoSectionSub: {
+    fontSize: 11,
+    color: '#64748B',
+    marginTop: 2,
+    marginBottom: 4,
+  },
+  geoCountBadge: {
+    backgroundColor: '#0F172A',
+    borderRadius: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+  },
+  geoCountText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  emptyGeoWrap: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 18,
   },
   emptyGeoText: {
     fontSize: 12,
     color: '#94A3B8',
     textAlign: 'center',
-    marginVertical: 8,
+    marginTop: 6,
+    fontWeight: '500',
   },
-  geoItemRow: {
+  geoListScrollBox: {
+    maxHeight: 180,
+    width: '100%',
+  },
+  geoItemCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: '#E2E8F0',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    padding: 10,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.03,
+    shadowRadius: 3,
+    elevation: 1,
+  },
+  geoItemIconBubble: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  geoNameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
   },
   geoItemName: {
     fontSize: 13,
     fontWeight: '700',
     color: '#0F172A',
+    flexShrink: 1,
   },
-  geoItemArea: {
+  geoTypePill: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  geoTypePillText: {
+    fontSize: 9,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+  },
+  geoItemDetail: {
     fontSize: 11,
     color: '#64748B',
     marginTop: 2,
+  },
+  geoDeleteBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    backgroundColor: '#FEF2F2',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  radiusPillsRow: {
+    flexDirection: 'row',
+    gap: 6,
+    marginTop: 4,
+  },
+  radiusPill: {
+    flex: 1,
+    paddingVertical: 8,
+    borderRadius: 10,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    alignItems: 'center',
+  },
+  radiusPillActive: {
+    backgroundColor: '#0284C7',
+    borderColor: '#0284C7',
+  },
+  radiusPillText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#475569',
+  },
+  radiusPillTextActive: {
+    color: '#FFFFFF',
+  },
+  createGeoBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#16A34A',
+    borderRadius: 12,
+    paddingVertical: 12,
+    width: '100%',
+  },
+  createGeoBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#FFFFFF',
   },
   devSelectChip: {
     paddingVertical: 6,
