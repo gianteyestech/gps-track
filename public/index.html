@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1.00001, viewport-fit=cover, user-scalable=no"
+    />
+    <title>GPS Track - Live Fleet Monitoring</title>
+    <meta name="description" content="Real-Time Fleet & GPS Tracking System by GIANT EYE TECH" />
+
+    <!-- Progressive Web App Manifest & Colors -->
+    <link rel="manifest" href="/manifest.json" />
+    <meta name="theme-color" content="#121B2A" />
+    <meta name="mobile-web-app-capable" content="yes" />
+
+    <!-- iOS Native Web App / Add to Home Screen -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="GPS Track" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png" />
+    <link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png" />
+    <link rel="icon" href="/favicon.ico" />
+
+    <!-- Native Mobile App Styling (No Rubber-Banding, No Callouts, Pure Native Touch) -->
+    <style id="expo-reset">
+      html, body, #root {
+        height: 100%;
+        width: 100%;
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+        background-color: #121B2A;
+      }
+      body {
+        overscroll-behavior: none;
+        -webkit-overscroll-behavior: none;
+        -webkit-user-select: none;
+        user-select: none;
+        -webkit-tap-highlight-color: transparent;
+        -webkit-touch-callout: none;
+      }
+      #root {
+        display: flex;
+        flex: 1;
+      }
+      input, textarea {
+        -webkit-user-select: text !important;
+        user-select: text !important;
+      }
+    </style>
+  </head>
+
+  <body>
+    <noscript>You need to enable JavaScript to run GPS Track.</noscript>
+    <div id="root"></div>
+  </body>
+</html>

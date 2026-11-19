@@ -22,7 +22,17 @@
       "predictiveBackGestureEnabled": false
     },
     "web": {
-      "favicon": "./assets/favicon.png"
+      "favicon": "./assets/favicon.png",
+      "pwa": {
+        "name": "GPS Track",
+        "shortName": "GPS Track",
+        "description": "Real-time fleet tracking and vehicle monitoring system by GIANT EYE TECH",
+        "themeColor": "#121B2A",
+        "backgroundColor": "#121B2A",
+        "display": "standalone",
+        "orientation": "portrait",
+        "startUrl": "/"
+      }
     },
     "plugins": [
       "expo-router",
