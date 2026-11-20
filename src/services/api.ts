@@ -237,6 +237,36 @@ class TraccarApiService {
     return this.request<Event[]>(`/api/reports/events?${params.toString()}`);
   }
 
+  // Summary Report (Total distance, engine hours, max speed, average speed)
+  public async getSummaryReport(deviceId: number, from: string, to: string): Promise<any[]> {
+    const params = new URLSearchParams({
+      deviceId: deviceId.toString(),
+      from,
+      to,
+    });
+    return this.request<any[]>(`/api/reports/summary?${params.toString()}`);
+  }
+
+  // Trips Report (Individual journeys with start/end address and distance)
+  public async getTripsReport(deviceId: number, from: string, to: string): Promise<any[]> {
+    const params = new URLSearchParams({
+      deviceId: deviceId.toString(),
+      from,
+      to,
+    });
+    return this.request<any[]>(`/api/reports/trips?${params.toString()}`);
+  }
+
+  // Stops Report (Parking duration and locations)
+  public async getStopsReport(deviceId: number, from: string, to: string): Promise<any[]> {
+    const params = new URLSearchParams({
+      deviceId: deviceId.toString(),
+      from,
+      to,
+    });
+    return this.request<any[]>(`/api/reports/stops?${params.toString()}`);
+  }
+
   // Geofences
   public async getGeofences(): Promise<Geofence[]> {
     return this.request<Geofence[]>('/api/geofences');
