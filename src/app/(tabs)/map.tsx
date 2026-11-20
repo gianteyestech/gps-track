@@ -38,7 +38,7 @@ export default function LiveMapScreen() {
 
   // User live location & vehicle chase/track mode state
   const [userLocation, setUserLocation] = useState<{ latitude: number; longitude: number; accuracy?: number } | null>(null);
-  const [isTrackMode, setIsTrackMode] = useState<boolean>(false);
+  const [isTrackMode, setIsTrackMode] = useState<boolean>(true);
   const [isLocating, setIsLocating] = useState<boolean>(false);
 
   // Set device from navigation param if passed
@@ -51,6 +51,23 @@ export default function LiveMapScreen() {
   // Watch user's live physical location in Web/PWA
   useEffect(() => {
     if (typeof window !== 'undefined' && 'geolocation' in navigator) {
+      // 1. Immediate high-accuracy position fetch
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          setUserLocation({
+            latitude: pos.coords.latitude,
+            longitude: pos.coords.longitude,
+            accuracy: pos.coords.accuracy,
+          });
+          setRecenterTrigger((prev) => prev + 1);
+        },
+        (err) => {
+          console.warn('Geolocation immediate notice:', err.message);
+        },
+        { enableHighAccuracy: true, timeout: 8000, maximumAge: 3000 }
+      );
+
+      // 2. Real-time continuous position watcher
       const watchId = navigator.geolocation.watchPosition(
         (pos) => {
           setUserLocation({
@@ -60,7 +77,7 @@ export default function LiveMapScreen() {
           });
         },
         (err) => {
-          console.warn('Geolocation notice:', err.message);
+          console.warn('Geolocation watch notice:', err.message);
         },
         { enableHighAccuracy: true, timeout: 20000, maximumAge: 10000 }
       );
@@ -254,7 +271,7 @@ export default function LiveMapScreen() {
         )}
 
         {/* Live Proximity / Relative Tracking Pill */}
-        {distanceToVehicle !== null && currentDevice && (
+        {distanceToVehicle !== null && currentDevice ? (
           <View style={styles.proximityFloatingCard}>
             <View style={styles.proximityLeft}>
               <View style={styles.humanBadge}>
@@ -271,15 +288,46 @@ export default function LiveMapScreen() {
               <Text style={styles.proximityEtaText}>~{etaMinutes} min away</Text>
             </View>
 
+            <View style={styles.proximityActions}>
+              <TouchableOpacity
+                style={styles.fitBothBtn}
+                onPress={() => setRecenterTrigger((prev) => prev + 1)}
+                activeOpacity={0.8}
+              >
+                <MaterialCommunityIcons name="arrow-expand-all" size={14} color="#0F172A" />
+                <Text style={styles.fitBothBtnText}>Fit Both</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.navigateBtn}
+                onPress={handleOpenDirections}
+                activeOpacity={0.8}
+              >
+                <MaterialCommunityIcons name="navigation-variant" size={14} color="#FFFFFF" />
+                <Text style={styles.navigateBtnText}>Go</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        ) : (
+          !userLocation && (
             <TouchableOpacity
-              style={styles.navigateBtn}
-              onPress={handleOpenDirections}
+              style={styles.enableLocationBar}
+              onPress={toggleTrackMode}
               activeOpacity={0.8}
             >
-              <MaterialCommunityIcons name="navigation-variant" size={14} color="#FFFFFF" />
-              <Text style={styles.navigateBtnText}>Directions</Text>
+              <View style={styles.enableLocationLeft}>
+                <View style={styles.humanBadge}>
+                  <MaterialCommunityIcons name="human" size={15} color="#FFFFFF" />
+                </View>
+                <Text style={styles.enableLocationText}>
+                  Tap to show your location & track {currentDevice?.name || 'vehicle'} together
+                </Text>
+              </View>
+              <View style={styles.enableLocationBadge}>
+                <Text style={styles.enableLocationBadgeText}>Show Both</Text>
+              </View>
             </TouchableOpacity>
-          </View>
+          )
         )}
       </SafeAreaView>
 
@@ -863,6 +911,67 @@ const styles = StyleSheet.create({
   navigateBtnText: {
     fontSize: 11,
     fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  proximityActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  fitBothBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#F1F5F9',
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+  },
+  fitBothBtnText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#0F172A',
+  },
+  enableLocationBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: 'rgba(15, 23, 42, 0.94)',
+    borderRadius: 14,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: '#334155',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 6,
+  },
+  enableLocationLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flex: 1,
+  },
+  enableLocationText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#FFFFFF',
+    flex: 1,
+  },
+  enableLocationBadge: {
+    backgroundColor: '#EA580C',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+  },
+  enableLocationBadgeText: {
+    fontSize: 11,
+    fontWeight: '800',
     color: '#FFFFFF',
   },
   leftWidgets: {

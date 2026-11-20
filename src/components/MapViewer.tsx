@@ -541,10 +541,22 @@ const LEAFLET_STATIC_HTML = `
           }
         });
 
-        // 3. Viewport control — NEVER resets or flickers on normal 3.5s heartbeats!
-        if (!mapInitialized) {
-          if (data.selectedDeviceId && markersMap[data.selectedDeviceId]) {
-            map.setView(markersMap[data.selectedDeviceId].getLatLng(), 15);
+        // 3. Viewport control — Automatically frames BOTH Human & Vehicle when both exist!
+        var targetMarker = (data.selectedDeviceId && markersMap[data.selectedDeviceId])
+          ? markersMap[data.selectedDeviceId]
+          : null;
+
+        if (currentUserLocation && targetMarker) {
+          var userPt = [currentUserLocation.latitude, currentUserLocation.longitude];
+          var vehPt = targetMarker.getLatLng();
+          if (!mapInitialized || data.forceRecenter || data.selectedDeviceId !== lastSelectedId) {
+            map.fitBounds([userPt, vehPt], { padding: [90, 90], maxZoom: 16, animate: true });
+            mapInitialized = true;
+            lastSelectedId = data.selectedDeviceId;
+          }
+        } else if (!mapInitialized) {
+          if (targetMarker) {
+            map.setView(targetMarker.getLatLng(), 15);
           } else if (bounds.length > 0) {
             map.fitBounds(bounds, { padding: [50, 50], maxZoom: 15 });
           }
@@ -553,12 +565,12 @@ const LEAFLET_STATIC_HTML = `
         } else {
           if (data.selectedDeviceId && data.selectedDeviceId !== lastSelectedId) {
             lastSelectedId = data.selectedDeviceId;
-            if (markersMap[data.selectedDeviceId]) {
-              map.panTo(markersMap[data.selectedDeviceId].getLatLng(), { animate: true, duration: 0.5 });
+            if (targetMarker) {
+              map.panTo(targetMarker.getLatLng(), { animate: true, duration: 0.5 });
             }
           } else if (data.forceRecenter) {
-            if (data.selectedDeviceId && markersMap[data.selectedDeviceId]) {
-              map.setView(markersMap[data.selectedDeviceId].getLatLng(), 15, { animate: true });
+            if (targetMarker) {
+              map.setView(targetMarker.getLatLng(), 15, { animate: true });
             } else if (bounds.length > 0) {
               map.fitBounds(bounds, { padding: [50, 50], maxZoom: 15, animate: true });
             }
@@ -605,6 +617,7 @@ const LEAFLET_STATIC_HTML = `
 
       // 6. User Location (Human Pin) & Direct Connecting Path to Vehicle
       if (data.userLocation && data.userLocation.latitude && data.userLocation.longitude) {
+        var isFirstUserLoc = !currentUserLocation;
         currentUserLocation = data.userLocation;
         var uLatlng = [data.userLocation.latitude, data.userLocation.longitude];
 
@@ -618,7 +631,7 @@ const LEAFLET_STATIC_HTML = `
             iconAnchor: [22, 42],
             popupAnchor: [0, -42]
           });
-          userMarker = L.marker(uLatlng, { icon: humanIcon, zIndexOffset: 1000 }).addTo(map);
+          userMarker = L.marker(uLatlng, { icon: humanIcon, zIndexOffset: 2000 }).addTo(map);
         }
 
         // Draw dynamic connecting line between Human and Target Vehicle
@@ -637,11 +650,11 @@ const LEAFLET_STATIC_HTML = `
             }).addTo(map);
           }
 
-          // In Track Mode, dynamically frame both the Human and the Vehicle
-          if (data.trackMode && !userIsInteracting) {
+          // Frame BOTH You (Human) and Vehicle on initial detection or when Track Mode / Recenter is active!
+          if (isFirstUserLoc || data.trackMode || data.forceRecenter) {
             map.fitBounds([uLatlng, [vLatLng.lat, vLatLng.lng]], {
-              padding: [70, 70],
-              maxZoom: 17,
+              padding: [90, 90],
+              maxZoom: 16,
               animate: true
             });
           }
