@@ -28,7 +28,7 @@ export default function LiveMapScreen() {
   } = useTraccar();
 
   const [mapLayer, setMapLayer] = useState<'osm' | 'satellite' | 'dark'>('osm');
-  const [autoFit, setAutoFit] = useState<boolean>(true);
+  const [recenterTrigger, setRecenterTrigger] = useState<number>(0);
   const [commandModalVisible, setCommandModalVisible] = useState<boolean>(false);
   const [isExpanded, setIsExpanded] = useState<boolean>(false);
 
@@ -89,7 +89,7 @@ export default function LiveMapScreen() {
         selectedDeviceId={currentDevice?.id}
         onSelectDevice={(id) => setSelectedDeviceId(id)}
         mapLayer={mapLayer}
-        autoFit={autoFit}
+        forceRecenter={recenterTrigger}
       />
 
       {/* Top Status Header Banner matching Image 4 */}
@@ -230,7 +230,7 @@ export default function LiveMapScreen() {
         {/* Recenter */}
         <TouchableOpacity
           style={styles.squareToolBtn}
-          onPress={() => setAutoFit(!autoFit)}
+          onPress={() => setRecenterTrigger((prev) => prev + 1)}
         >
           <MaterialCommunityIcons name="crosshairs-gps" size={22} color="#1E293B" />
         </TouchableOpacity>

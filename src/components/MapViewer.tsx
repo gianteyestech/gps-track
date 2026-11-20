@@ -1,4 +1,4 @@
-import React, { useRef, useEffect } from 'react';
+import React, { useRef, useEffect, useMemo } from 'react';
 import { StyleSheet, View, Platform } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { Device, Position } from '../types/traccar';
@@ -13,61 +13,13 @@ interface MapViewerProps {
   playbackPosition?: { latitude: number; longitude: number; course?: number };
   mapLayer?: 'osm' | 'satellite' | 'dark';
   autoFit?: boolean;
+  forceRecenter?: number;
 }
 
 const CustomWebView = WebView as any;
 
-export function MapViewer({
-  devices,
-  positions,
-  selectedDeviceId,
-  onSelectDevice,
-  routeCoordinates,
-  playbackPosition,
-  mapLayer = 'osm',
-  autoFit = true,
-}: MapViewerProps) {
-  const webViewRef = useRef<any>(null);
-  const iframeRef = useRef<any>(null);
-
-  // Prepare markers data payload
-  const markers = devices
-    .map((dev) => {
-      const pos = positions[dev.id];
-      if (!pos || !pos.latitude || !pos.longitude) return null;
-      const status = getDeviceOperationalStatus(dev, pos);
-      const color = getStatusColor(status);
-      return {
-        id: dev.id,
-        name: dev.name,
-        lat: pos.latitude,
-        lng: pos.longitude,
-        course: pos.course || 0,
-        speed: formatSpeed(pos.speed),
-        status,
-        color,
-        isSelected: dev.id === selectedDeviceId,
-      };
-    })
-    .filter(Boolean) as any[];
-
-  // Default initial center: selected device, first device, or fallback (Lahore, Pakistan)
-  const defaultCenter =
-    markers.length > 0
-      ? [markers[0].lat, markers[0].lng]
-      : [31.5204, 74.3587];
-
-  const payload = {
-    markers,
-    layer: mapLayer,
-    route: routeCoordinates || [],
-    playbackPosition,
-    autoFit,
-    shouldFollow: !!selectedDeviceId,
-  };
-
-  // Generate HTML for Leaflet Map with Google Maps Live Traffic
-  const leafletHtml = `
+// Static Leaflet HTML template — NEVER changes across renders so the iframe/WebView is never reloaded!
+const LEAFLET_STATIC_HTML = `
 <!DOCTYPE html>
 <html>
 <head>
@@ -89,6 +41,11 @@ export function MapViewer({
       background: none;
       border: none;
     }
+    /* Smooth CSS transition for marker translation so vehicles glide between GPS fixes */
+    .leaflet-marker-icon {
+      transition: transform 0.6s cubic-bezier(0.25, 1, 0.5, 1);
+      will-change: transform;
+    }
     .marker-pin {
       width: 40px;
       height: 40px;
@@ -99,8 +56,21 @@ export function MapViewer({
       justify-content: center;
       box-shadow: 0 4px 12px rgba(0,0,0,0.35);
       position: relative;
-      transition: transform 0.25s ease;
       cursor: pointer;
+      transition: border-color 0.25s ease, box-shadow 0.25s ease, transform 0.25s ease;
+    }
+    .marker-pin.selected {
+      border: 3.5px solid #2563EB !important;
+      transform: scale(1.15);
+      box-shadow: 0 0 16px rgba(37,99,235,0.7) !important;
+    }
+    .marker-rotator {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: transform 0.35s ease;
     }
     .marker-arrow {
       width: 0;
@@ -128,21 +98,24 @@ export function MapViewer({
 <body>
   <div id="map"></div>
   <script>
-    var initialCenter = [${defaultCenter[0]}, ${defaultCenter[1]}];
     var map = L.map('map', {
       zoomControl: true,
       attributionControl: false
-    }).setView(initialCenter, 13);
+    }).setView([31.5204, 74.3587], 12);
 
     var currentTileLayer = null;
+    var currentLayerType = null;
     function setLayer(layerType) {
+      if (currentLayerType === layerType && currentTileLayer) return;
+      currentLayerType = layerType;
       if (currentTileLayer) map.removeLayer(currentTileLayer);
+
       if (layerType === 'satellite') {
         currentTileLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19 });
       } else if (layerType === 'dark') {
         currentTileLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', { maxZoom: 19, subdomains: 'abcd' });
       } else {
-        // Standard Google Maps with Live Traffic
+        // High performance Google Maps layer with live traffic
         currentTileLayer = L.tileLayer('https://{s}.google.com/vt/lyrs=m,traffic&x={x}&y={y}&z={z}', {
           maxZoom: 20,
           subdomains: ['mt0', 'mt1', 'mt2', 'mt3']
@@ -150,18 +123,34 @@ export function MapViewer({
       }
       currentTileLayer.addTo(map);
     }
-    setLayer('${mapLayer}');
+    setLayer('osm');
 
     var markersMap = {};
+    var markersMeta = {};
     var routePolyline = null;
     var playbackMarker = null;
+    var mapInitialized = false;
+    var lastSelectedId = null;
+    var userIsInteracting = false;
+
+    // Track user drag / zoom so we do not interrupt manual inspection
+    map.on('movestart dragstart zoomstart', function() {
+      userIsInteracting = true;
+    });
+    map.on('moveend dragend zoomend', function() {
+      setTimeout(function() {
+        userIsInteracting = false;
+      }, 3000);
+    });
 
     function createMarkerHtml(m) {
-      var pulse = m.isSelected
-        ? 'border: 3px solid #2563EB; transform: scale(1.18); box-shadow: 0 0 16px rgba(37,99,235,0.6);'
+      var isSel = m.isSelected ? 'selected' : '';
+      var borderStyle = m.isSelected
+        ? ''
         : 'border: 2.5px solid ' + m.color + ';';
-      return '<div class="marker-pin" style="' + pulse + '">' +
-        '<div style="transform: rotate(' + m.course + 'deg); width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;">' +
+
+      return '<div class="marker-pin ' + isSel + '" style="' + borderStyle + '">' +
+        '<div class="marker-rotator" style="transform: rotate(' + (m.course || 0) + 'deg);">' +
           '<div class="marker-arrow" style="border-bottom: 12px solid ' + m.color + ';"></div>' +
           '<svg width="20" height="20" viewBox="0 0 24 24" fill="' + m.color + '" style="margin-top: 5px;">' +
             '<path d="M18.92 6.01C18.72 5.42 18.16 5 17.5 5h-11c-.66 0-1.21.42-1.42 1.01L3 12v8c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-1h12v1c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-8l-2.08-5.99zM6.5 16c-.83 0-1.5-.67-1.5-1.5S5.67 13 6.5 13s1.5.67 1.5 1.5S7.33 16 6.5 16zm11 0c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zM5 11l1.5-4.5h11L19 11H5z"/>' +
@@ -181,8 +170,11 @@ export function MapViewer({
 
     window.updateData = function(data) {
       if (!data) return;
+
+      // 1. Map Layer
       if (data.layer) setLayer(data.layer);
 
+      // 2. Markers update
       if (data.markers && data.markers.length > 0) {
         var bounds = [];
         var activeIds = {};
@@ -192,44 +184,80 @@ export function MapViewer({
           var latlng = [m.lat, m.lng];
           bounds.push(latlng);
 
-          var icon = L.divIcon({
-            className: 'custom-marker',
-            html: createMarkerHtml(m),
-            iconSize: [40, 40],
-            iconAnchor: [20, 20],
-            popupAnchor: [0, -24]
-          });
+          var existing = markersMap[m.id];
+          var meta = markersMeta[m.id];
 
-          if (markersMap[m.id]) {
-            markersMap[m.id].setLatLng(latlng);
-            markersMap[m.id].setIcon(icon);
+          if (existing) {
+            // ONLY move coordinates — CSS transition will glide the vehicle smoothly!
+            existing.setLatLng(latlng);
+
+            // If rotation, color, selection changed, update icon
+            if (!meta || meta.course !== m.course || meta.isSelected !== m.isSelected || meta.color !== m.color || meta.name !== m.name) {
+              existing.setIcon(L.divIcon({
+                className: 'custom-marker',
+                html: createMarkerHtml(m),
+                iconSize: [40, 40],
+                iconAnchor: [20, 20],
+                popupAnchor: [0, -24]
+              }));
+              markersMeta[m.id] = { course: m.course, isSelected: m.isSelected, color: m.color, name: m.name };
+            }
           } else {
+            // New marker
+            var icon = L.divIcon({
+              className: 'custom-marker',
+              html: createMarkerHtml(m),
+              iconSize: [40, 40],
+              iconAnchor: [20, 20],
+              popupAnchor: [0, -24]
+            });
             var marker = L.marker(latlng, { icon: icon }).addTo(map);
             marker.on('click', function() {
               emitSelect(m.id);
             });
             markersMap[m.id] = marker;
-          }
-
-          if (m.isSelected && data.shouldFollow) {
-            map.panTo(latlng, { animate: true, duration: 0.6 });
+            markersMeta[m.id] = { course: m.course, isSelected: m.isSelected, color: m.color, name: m.name };
           }
         });
 
-        // Clean stale markers
+        // Clean up removed markers
         Object.keys(markersMap).forEach(function(id) {
           if (!activeIds[id]) {
             map.removeLayer(markersMap[id]);
             delete markersMap[id];
+            delete markersMeta[id];
           }
         });
 
-        if (data.autoFit && bounds.length > 0 && !data.shouldFollow) {
-          map.fitBounds(bounds, { padding: [60, 60], maxZoom: 16 });
+        // 3. Viewport control — NEVER resets or flickers on normal 3.5s heartbeats!
+        if (!mapInitialized) {
+          // Initial fit once
+          if (data.selectedDeviceId && markersMap[data.selectedDeviceId]) {
+            map.setView(markersMap[data.selectedDeviceId].getLatLng(), 15);
+          } else if (bounds.length > 0) {
+            map.fitBounds(bounds, { padding: [50, 50], maxZoom: 15 });
+          }
+          mapInitialized = true;
+          lastSelectedId = data.selectedDeviceId;
+        } else {
+          // If user clicked a different vehicle in the strip
+          if (data.selectedDeviceId && data.selectedDeviceId !== lastSelectedId) {
+            lastSelectedId = data.selectedDeviceId;
+            if (markersMap[data.selectedDeviceId]) {
+              map.panTo(markersMap[data.selectedDeviceId].getLatLng(), { animate: true, duration: 0.5 });
+            }
+          } else if (data.forceRecenter) {
+            // User explicitly tapped the Crosshairs recenter button
+            if (data.selectedDeviceId && markersMap[data.selectedDeviceId]) {
+              map.setView(markersMap[data.selectedDeviceId].getLatLng(), 15, { animate: true });
+            } else if (bounds.length > 0) {
+              map.fitBounds(bounds, { padding: [50, 50], maxZoom: 15, animate: true });
+            }
+          }
         }
       }
 
-      // Route polyline
+      // 4. Historical Route polyline (for playback)
       if (data.route && data.route.length > 0) {
         if (routePolyline) map.removeLayer(routePolyline);
         var coords = data.route.map(function(pt) { return [pt.latitude, pt.longitude]; });
@@ -239,16 +267,19 @@ export function MapViewer({
           opacity: 0.85
         }).addTo(map);
 
-        map.fitBounds(routePolyline.getBounds(), { padding: [40, 40] });
+        if (!mapInitialized) {
+          map.fitBounds(routePolyline.getBounds(), { padding: [40, 40] });
+          mapInitialized = true;
+        }
       }
 
-      // Playback marker
+      // 5. Playback marker (smooth position animation during playback)
       if (data.playbackPosition) {
         var pLatlng = [data.playbackPosition.latitude, data.playbackPosition.longitude];
         var pIcon = L.divIcon({
           className: 'custom-marker',
-          html: '<div class="marker-pin" style="background:#2563EB; border:2px solid white;">' +
-            '<div style="transform: rotate(' + (data.playbackPosition.course || 0) + 'deg); width:100%; height:100%; display:flex; align-items:center; justify-content:center;">' +
+          html: '<div class="marker-pin" style="background:#2563EB; border:2.5px solid white;">' +
+            '<div class="marker-rotator" style="transform: rotate(' + (data.playbackPosition.course || 0) + 'deg);">' +
               '<div class="marker-arrow" style="border-bottom: 10px solid white;"></div>' +
             '</div>' +
           '</div>',
@@ -258,41 +289,98 @@ export function MapViewer({
 
         if (playbackMarker) {
           playbackMarker.setLatLng(pLatlng);
-          playbackMarker.setIcon(pIcon);
         } else {
           playbackMarker = L.marker(pLatlng, { icon: pIcon }).addTo(map);
         }
-        map.panTo(pLatlng, { animate: true, duration: 0.2 });
       }
     };
 
-    // Pre-load with initial markers right away
-    window.updateData(${JSON.stringify(payload)});
+    // Listen for postMessage from parent
+    window.addEventListener('message', function(e) {
+      if (e.data && e.data.type === 'UPDATE_DATA') {
+        window.updateData(e.data.data);
+      }
+    });
 
-    // Notify parent frame ready
+    // Notify parent frame that map is fully ready
     if (window.parent && window.parent !== window) {
       window.parent.postMessage({ type: 'MAP_READY' }, '*');
     }
   </script>
 </body>
 </html>
-  `;
+`;
+
+export function MapViewer({
+  devices,
+  positions,
+  selectedDeviceId,
+  onSelectDevice,
+  routeCoordinates,
+  playbackPosition,
+  mapLayer = 'osm',
+  autoFit = true,
+  forceRecenter = 0,
+}: MapViewerProps) {
+  const webViewRef = useRef<any>(null);
+  const iframeRef = useRef<any>(null);
+  const isMapReadyRef = useRef<boolean>(false);
+
+  // Prepare markers data payload
+  const markers = useMemo(() => {
+    return devices
+      .map((dev) => {
+        const pos = positions[dev.id];
+        if (!pos || !pos.latitude || !pos.longitude) return null;
+        const status = getDeviceOperationalStatus(dev, pos);
+        const color = getStatusColor(status);
+        return {
+          id: dev.id,
+          name: dev.name,
+          lat: pos.latitude,
+          lng: pos.longitude,
+          course: pos.course || 0,
+          speed: formatSpeed(pos.speed),
+          status,
+          color,
+          isSelected: dev.id === selectedDeviceId,
+        };
+      })
+      .filter(Boolean) as any[];
+  }, [devices, positions, selectedDeviceId]);
+
+  const payload = useMemo(() => ({
+    markers,
+    layer: mapLayer,
+    route: routeCoordinates || [],
+    playbackPosition,
+    autoFit,
+    selectedDeviceId,
+    forceRecenter: forceRecenter > 0,
+  }), [markers, mapLayer, routeCoordinates, playbackPosition, autoFit, selectedDeviceId, forceRecenter]);
+
+  // Dispatch payload to existing map instance without ever reloading the container
+  const sendUpdate = (data: any) => {
+    if (Platform.OS === 'web') {
+      try {
+        if (iframeRef.current?.contentWindow?.updateData) {
+          iframeRef.current.contentWindow.updateData(data);
+        } else if (iframeRef.current?.contentWindow) {
+          iframeRef.current.contentWindow.postMessage({ type: 'UPDATE_DATA', data }, '*');
+        }
+      } catch (err) {
+        console.warn('Map update error:', err);
+      }
+    } else if (webViewRef.current) {
+      const js = `if (window.updateData) { window.updateData(${JSON.stringify(data)}); } true;`;
+      webViewRef.current.injectJavaScript(js);
+    }
+  };
 
   // Push updates to map whenever markers, selected device, or route coordinates change
   useEffect(() => {
-    if (Platform.OS === 'web') {
-      if (
-        iframeRef.current &&
-        iframeRef.current.contentWindow &&
-        iframeRef.current.contentWindow.updateData
-      ) {
-        iframeRef.current.contentWindow.updateData(payload);
-      }
-    } else if (webViewRef.current) {
-      const js = `if (window.updateData) { window.updateData(${JSON.stringify(payload)}); } true;`;
-      webViewRef.current.injectJavaScript(js);
-    }
-  }, [markers, mapLayer, routeCoordinates, playbackPosition, autoFit, selectedDeviceId]);
+    sendUpdate(payload);
+  }, [payload]);
 
   // Web iframe message listener
   useEffect(() => {
@@ -303,9 +391,8 @@ export function MapViewer({
           if (data && data.type === 'SELECT_DEVICE' && onSelectDevice) {
             onSelectDevice(data.deviceId);
           } else if (data && data.type === 'MAP_READY') {
-            if (iframeRef.current?.contentWindow?.updateData) {
-              iframeRef.current.contentWindow.updateData(payload);
-            }
+            isMapReadyRef.current = true;
+            sendUpdate(payload);
           }
         } catch {}
       };
@@ -328,13 +415,17 @@ export function MapViewer({
     }
   };
 
-  // On Web, render an iframe directly; on iOS/Android, render WebView
+  // On Web, render an iframe directly with a CONSTANT static srcDoc
   if (Platform.OS === 'web') {
     return (
       <View style={styles.container}>
         <iframe
           ref={iframeRef}
-          srcDoc={leafletHtml}
+          srcDoc={LEAFLET_STATIC_HTML}
+          onLoad={() => {
+            // Immediately send current payload upon iframe finish loading
+            setTimeout(() => sendUpdate(payload), 100);
+          }}
           style={{
             width: '100%',
             height: '100%',
@@ -347,17 +438,21 @@ export function MapViewer({
     );
   }
 
+  // On Native iOS/Android, render WebView with constant static source
   return (
     <View style={styles.container}>
       <CustomWebView
         ref={webViewRef}
         originWhitelist={['*']}
-        source={{ html: leafletHtml }}
+        source={{ html: LEAFLET_STATIC_HTML }}
         style={styles.webView}
         javaScriptEnabled={true}
         domStorageEnabled={true}
         onMessage={handleMessage}
         scrollEnabled={false}
+        onLoadEnd={() => {
+          setTimeout(() => sendUpdate(payload), 100);
+        }}
       />
     </View>
   );
