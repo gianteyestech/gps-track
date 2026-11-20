@@ -11,6 +11,7 @@ import {
   Linking,
   Platform,
   ActivityIndicator,
+  Switch,
 } from 'react-native';
 import { router } from 'expo-router';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -21,7 +22,7 @@ import { GTS_COLORS } from '../../constants/theme';
 import { APP_CONFIG } from '../../constants/config';
 import { Device, Geofence } from '../../types/traccar';
 import * as Notifications from 'expo-notifications';
-import { notificationService } from '../../services/notifications';
+import { notificationService, NotificationPreferences } from '../../services/notifications';
 
 const parseGeofenceDetails = (area?: string) => {
   if (!area) {
@@ -133,6 +134,20 @@ export default function SettingsScreen() {
   const [showInfoModal, setShowInfoModal] = useState(false);
   const [infoTitle, setInfoTitle] = useState('');
   const [infoContent, setInfoContent] = useState('');
+
+  // 7. Notification Preferences Modal
+  const [showNotifModal, setShowNotifModal] = useState(false);
+  const [notifPrefs, setNotifPrefs] = useState<NotificationPreferences>(notificationService.getPreferences());
+
+  useEffect(() => {
+    notificationService.loadPreferences().then((p) => setNotifPrefs(p));
+  }, []);
+
+  const handleTogglePref = async (key: keyof NotificationPreferences) => {
+    const updated = await notificationService.setPreferences({ [key]: !notifPrefs[key] });
+    setNotifPrefs({ ...updated });
+    showToast(`${key === 'enabled' ? 'Master Alerts' : key === 'sound' ? 'Alert Chime' : key} ${!notifPrefs[key] ? 'Enabled' : 'Muted'}`);
+  };
 
   // Push notification test & live browser permission
   const handleTestPush = async () => {
@@ -373,16 +388,16 @@ export default function SettingsScreen() {
       onPress: () => router.push(devices.length > 0 ? `/reports/${devices[0].id}` : '/reports/1'),
     },
     {
-      title: 'Alerts List',
+      title: 'Alerts Log History',
       icon: 'bell',
       iconColor: '#EF4444',
       onPress: () => router.push('/(tabs)/events'),
     },
     {
-      title: 'Activate Alerts',
-      icon: 'bell-ring',
-      iconColor: '#EF4444',
-      onPress: () => router.push('/(tabs)/events'),
+      title: 'Notification Settings (Enable / Disable)',
+      icon: 'bell-cog',
+      iconColor: '#2563EB',
+      onPress: () => setShowNotifModal(true),
     },
     {
       title: 'Test Push Notification (Lock Screen)',
@@ -952,6 +967,153 @@ export default function SettingsScreen() {
                 )}
               </TouchableOpacity>
             </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ========================================================================= */}
+      {/* 7. Notification Preferences Modal (Enable / Disable Alerts)                */}
+      {/* ========================================================================= */}
+      <Modal visible={showNotifModal} transparent animationType="slide">
+        <View style={styles.modernModalOverlay}>
+          <View style={[styles.modernModalCard, { maxWidth: 440, maxHeight: '88%' }]}>
+            <View style={[styles.logoutIconBubble, { backgroundColor: '#DBEAFE' }]}>
+              <MaterialCommunityIcons name="bell-cog" size={28} color="#2563EB" />
+            </View>
+
+            <Text style={styles.modernModalTitle}>Notification Settings</Text>
+            <Text style={styles.modernModalDesc}>Control live fleet alerts, audio chimes, and triggers.</Text>
+
+            <ScrollView style={{ width: '100%', marginTop: 12 }} showsVerticalScrollIndicator={false}>
+              {/* Master Switch Card */}
+              <View style={[styles.notifToggleRow, { backgroundColor: notifPrefs.enabled ? '#EFF6FF' : '#F1F5F9', borderColor: notifPrefs.enabled ? '#93C5FD' : '#E2E8F0' }]}>
+                <View style={{ flex: 1, paddingRight: 10 }}>
+                  <Text style={[styles.notifToggleTitle, { color: notifPrefs.enabled ? '#1D4ED8' : '#475569' }]}>
+                    Master Push Alerts
+                  </Text>
+                  <Text style={styles.notifToggleSub}>
+                    {notifPrefs.enabled ? 'Live alerts enabled across your fleet' : 'All vehicle notifications are muted'}
+                  </Text>
+                </View>
+                <Switch
+                  value={notifPrefs.enabled}
+                  onValueChange={() => handleTogglePref('enabled')}
+                  trackColor={{ false: '#CBD5E1', true: '#2563EB' }}
+                  thumbColor="#FFFFFF"
+                />
+              </View>
+
+              {/* Individual Trigger Switches */}
+              <View style={[styles.geoSectionCard, { marginTop: 12, opacity: notifPrefs.enabled ? 1 : 0.45 }]}>
+                <Text style={styles.geoSectionTitle}>Alert Triggers & Sounds</Text>
+
+                {/* Sound */}
+                <View style={styles.prefSubRow}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
+                    <MaterialCommunityIcons name="volume-high" size={20} color="#F59E0B" />
+                    <View>
+                      <Text style={styles.prefItemTitle}>Alert Chime Sound</Text>
+                      <Text style={styles.prefItemSub}>Play audio chime when alerts arrive</Text>
+                    </View>
+                  </View>
+                  <Switch
+                    disabled={!notifPrefs.enabled}
+                    value={notifPrefs.sound}
+                    onValueChange={() => handleTogglePref('sound')}
+                    trackColor={{ false: '#CBD5E1', true: '#10B981' }}
+                    thumbColor="#FFFFFF"
+                  />
+                </View>
+
+                {/* Ignition */}
+                <View style={styles.prefSubRow}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
+                    <MaterialCommunityIcons name="key-wireless" size={20} color="#10B981" />
+                    <View>
+                      <Text style={styles.prefItemTitle}>Ignition ON / OFF</Text>
+                      <Text style={styles.prefItemSub}>Alert when engine turns on or off</Text>
+                    </View>
+                  </View>
+                  <Switch
+                    disabled={!notifPrefs.enabled}
+                    value={notifPrefs.ignition}
+                    onValueChange={() => handleTogglePref('ignition')}
+                    trackColor={{ false: '#CBD5E1', true: '#10B981' }}
+                    thumbColor="#FFFFFF"
+                  />
+                </View>
+
+                {/* Over Speed */}
+                <View style={styles.prefSubRow}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
+                    <MaterialCommunityIcons name="speedometer" size={20} color="#EF4444" />
+                    <View>
+                      <Text style={styles.prefItemTitle}>Over Speed Alerts</Text>
+                      <Text style={styles.prefItemSub}>Warn when vehicles exceed speed limit</Text>
+                    </View>
+                  </View>
+                  <Switch
+                    disabled={!notifPrefs.enabled}
+                    value={notifPrefs.overspeed}
+                    onValueChange={() => handleTogglePref('overspeed')}
+                    trackColor={{ false: '#CBD5E1', true: '#10B981' }}
+                    thumbColor="#FFFFFF"
+                  />
+                </View>
+
+                {/* Geofence */}
+                <View style={styles.prefSubRow}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
+                    <MaterialCommunityIcons name="map-marker-radius" size={20} color="#8B5CF6" />
+                    <View>
+                      <Text style={styles.prefItemTitle}>Geofence Entry / Exit</Text>
+                      <Text style={styles.prefItemSub}>Alerts when safety zones are crossed</Text>
+                    </View>
+                  </View>
+                  <Switch
+                    disabled={!notifPrefs.enabled}
+                    value={notifPrefs.geofence}
+                    onValueChange={() => handleTogglePref('geofence')}
+                    trackColor={{ false: '#CBD5E1', true: '#10B981' }}
+                    thumbColor="#FFFFFF"
+                  />
+                </View>
+
+                {/* Motion */}
+                <View style={[styles.prefSubRow, { borderBottomWidth: 0 }]}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
+                    <MaterialCommunityIcons name="car-traction-control" size={20} color="#06B6D4" />
+                    <View>
+                      <Text style={styles.prefItemTitle}>Vehicle Motion / Parked</Text>
+                      <Text style={styles.prefItemSub}>Notify on vehicle drive or stop</Text>
+                    </View>
+                  </View>
+                  <Switch
+                    disabled={!notifPrefs.enabled}
+                    value={notifPrefs.motion}
+                    onValueChange={() => handleTogglePref('motion')}
+                    trackColor={{ false: '#CBD5E1', true: '#10B981' }}
+                    thumbColor="#FFFFFF"
+                  />
+                </View>
+              </View>
+
+              {/* Instant Test Alert Button */}
+              <TouchableOpacity
+                style={[styles.createGeoBtn, { backgroundColor: '#2563EB', marginTop: 14 }]}
+                onPress={handleTestPush}
+              >
+                <MaterialCommunityIcons name="bell-ring-outline" size={18} color="#FFFFFF" />
+                <Text style={styles.createGeoBtnText}>Send Instant Test Alert</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.modernCancelBtn, { marginTop: 10, width: '100%' }]}
+                onPress={() => setShowNotifModal(false)}
+              >
+                <Text style={styles.modernCancelBtnText}>Close</Text>
+              </TouchableOpacity>
+            </ScrollView>
           </View>
         </View>
       </Modal>
@@ -1574,5 +1736,41 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
     color: '#FFFFFF',
+  },
+  notifToggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 14,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    marginBottom: 8,
+  },
+  notifToggleTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  notifToggleSub: {
+    fontSize: 11,
+    color: '#64748B',
+    marginTop: 2,
+  },
+  prefSubRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5F9',
+  },
+  prefItemTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#1E293B',
+  },
+  prefItemSub: {
+    fontSize: 11,
+    color: '#64748B',
+    marginTop: 1,
   },
 });

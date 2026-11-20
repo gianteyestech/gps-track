@@ -1,8 +1,27 @@
 import { Platform } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Notifications from 'expo-notifications';
 import * as Haptics from 'expo-haptics';
 import { traccarApi } from './api';
 import { Event, User } from '../types/traccar';
+
+export interface NotificationPreferences {
+  enabled: boolean;
+  sound: boolean;
+  ignition: boolean;
+  overspeed: boolean;
+  geofence: boolean;
+  motion: boolean;
+}
+
+const DEFAULT_PREFS: NotificationPreferences = {
+  enabled: true,
+  sound: true,
+  ignition: true,
+  overspeed: true,
+  geofence: true,
+  motion: true,
+};
 
 // Configure foreground notification behavior for mobile
 Notifications.setNotificationHandler({
@@ -21,6 +40,33 @@ type InAppBannerHandler = (alert: { title: string; body: string; deviceId: numbe
 class NotificationService {
   private pushToken: string | null = null;
   private bannerHandlers: Set<InAppBannerHandler> = new Set();
+  private prefs: NotificationPreferences = { ...DEFAULT_PREFS };
+
+  constructor() {
+    this.loadPreferences();
+  }
+
+  public async loadPreferences(): Promise<NotificationPreferences> {
+    try {
+      const stored = await AsyncStorage.getItem('@gts_notification_prefs');
+      if (stored) {
+        this.prefs = { ...DEFAULT_PREFS, ...JSON.parse(stored) };
+      }
+    } catch {}
+    return this.prefs;
+  }
+
+  public getPreferences(): NotificationPreferences {
+    return this.prefs;
+  }
+
+  public async setPreferences(newPrefs: Partial<NotificationPreferences>): Promise<NotificationPreferences> {
+    this.prefs = { ...this.prefs, ...newPrefs };
+    try {
+      await AsyncStorage.setItem('@gts_notification_prefs', JSON.stringify(this.prefs));
+    } catch {}
+    return this.prefs;
+  }
 
   public subscribeInAppBanner(handler: InAppBannerHandler) {
     this.bannerHandlers.add(handler);
@@ -208,6 +254,13 @@ class NotificationService {
 
   // Trigger push alert banner for incoming Traccar events
   public async notifyEvent(event: Event, deviceName: string) {
+    // Check user preferences
+    if (!this.prefs.enabled) return;
+    if (!this.prefs.ignition && (event.type === 'ignitionOn' || event.type === 'ignitionOff')) return;
+    if (!this.prefs.overspeed && event.type === 'deviceOverspeed') return;
+    if (!this.prefs.geofence && (event.type === 'geofenceEnter' || event.type === 'geofenceExit')) return;
+    if (!this.prefs.motion && (event.type === 'deviceMoving' || event.type === 'deviceStopped')) return;
+
     let title = 'Vehicle Alert';
     let body = `${deviceName}: An event was reported`;
 
@@ -258,8 +311,10 @@ class NotificationService {
         break;
     }
 
-    // 1. Play alert chime
-    this.playAlertAudio();
+    // 1. Play alert chime (if sound enabled in settings)
+    if (this.prefs.sound) {
+      this.playAlertAudio();
+    }
 
     // 2. Trigger in-app drop-down toast banner
     this.bannerHandlers.forEach((handler) => {
