@@ -41,57 +41,82 @@ const LEAFLET_STATIC_HTML = `
       background: none;
       border: none;
     }
-    /* Smooth CSS transition for marker translation so vehicles glide between GPS fixes */
+    /* Smooth Continuous Interpolation: 3.4s linear motion matches 3.5s telemetry heartbeat */
     .leaflet-marker-icon {
-      transition: transform 0.6s cubic-bezier(0.25, 1, 0.5, 1);
+      transition: transform 3.4s linear !important;
       will-change: transform;
     }
-    .marker-pin {
-      width: 40px;
-      height: 40px;
-      border-radius: 50%;
-      background: #FFFFFF;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.35);
+    .real-vehicle-marker {
+      width: 44px;
+      height: 56px;
       position: relative;
-      cursor: pointer;
-      transition: border-color 0.25s ease, box-shadow 0.25s ease, transform 0.25s ease;
-    }
-    .marker-pin.selected {
-      border: 3.5px solid #2563EB !important;
-      transform: scale(1.15);
-      box-shadow: 0 0 16px rgba(37,99,235,0.7) !important;
-    }
-    .marker-rotator {
-      width: 100%;
-      height: 100%;
       display: flex;
       align-items: center;
       justify-content: center;
-      transition: transform 0.35s ease;
     }
-    .marker-arrow {
-      width: 0;
-      height: 0;
-      border-left: 6px solid transparent;
-      border-right: 6px solid transparent;
-      position: absolute;
-      top: 3px;
+    .vehicle-rotator {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: transform 1.0s cubic-bezier(0.4, 0, 0.2, 1);
+      cursor: pointer;
+      filter: drop-shadow(0 3px 6px rgba(0,0,0,0.38));
     }
-    .marker-label {
+    /* Selected Vehicle Pulsing Beacon */
+    .radar-beacon {
       position: absolute;
-      bottom: -22px;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 58px;
+      height: 58px;
+      border-radius: 50%;
+      border: 2.5px solid #2563EB;
+      background: rgba(37, 99, 235, 0.18);
+      animation: pulseBeacon 1.8s infinite ease-out;
+      pointer-events: none;
+      z-index: 1;
+    }
+    @keyframes pulseBeacon {
+      0% { transform: translate(-50%, -50%) scale(0.75); opacity: 1; }
+      100% { transform: translate(-50%, -50%) scale(1.65); opacity: 0; }
+    }
+    /* Plate and Speed Pill */
+    .vehicle-plate-pill {
+      position: absolute;
+      top: 100%;
+      left: 50%;
+      transform: translateX(-50%);
+      margin-top: 3px;
       white-space: nowrap;
-      font-size: 11px;
+      font-size: 10px;
       font-weight: 800;
-      color: #1F2937;
-      background: rgba(255,255,255,0.95);
+      color: #0F172A;
+      background: rgba(255, 255, 255, 0.96);
       padding: 2px 7px;
       border-radius: 6px;
-      box-shadow: 0 2px 6px rgba(0,0,0,0.25);
+      box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+      display: flex;
+      align-items: center;
+      gap: 4px;
       pointer-events: none;
+      z-index: 5;
+      border: 1px solid #CBD5E1;
+      backdrop-filter: blur(4px);
+    }
+    .vehicle-plate-pill.selected-plate {
+      background: #0F172A;
+      color: #FFFFFF;
+      border-color: #2563EB;
+      box-shadow: 0 2px 10px rgba(37, 99, 235, 0.5);
+    }
+    .plate-speed {
+      background: #10B981;
+      color: #FFFFFF;
+      font-size: 8.5px;
+      padding: 1px 4px;
+      border-radius: 4px;
+      font-weight: 700;
     }
   </style>
 </head>
@@ -143,20 +168,112 @@ const LEAFLET_STATIC_HTML = `
       }, 3000);
     });
 
-    function createMarkerHtml(m) {
-      var isSel = m.isSelected ? 'selected' : '';
-      var borderStyle = m.isSelected
-        ? ''
-        : 'border: 2.5px solid ' + m.color + ';';
+    // Generate authentic top-down realistic vehicle graphics matching category
+    function getVehicleSvg(category, color, isMoving) {
+      var cat = (category || 'car').toLowerCase();
 
-      return '<div class="marker-pin ' + isSel + '" style="' + borderStyle + '">' +
-        '<div class="marker-rotator" style="transform: rotate(' + (m.course || 0) + 'deg);">' +
-          '<div class="marker-arrow" style="border-bottom: 12px solid ' + m.color + ';"></div>' +
-          '<svg width="20" height="20" viewBox="0 0 24 24" fill="' + m.color + '" style="margin-top: 5px;">' +
-            '<path d="M18.92 6.01C18.72 5.42 18.16 5 17.5 5h-11c-.66 0-1.21.42-1.42 1.01L3 12v8c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-1h12v1c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-8l-2.08-5.99zM6.5 16c-.83 0-1.5-.67-1.5-1.5S5.67 13 6.5 13s1.5.67 1.5 1.5S7.33 16 6.5 16zm11 0c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zM5 11l1.5-4.5h11L19 11H5z"/>' +
-          '</svg>' +
+      // 1. TRUCK (Semi / Cargo Truck with container ribs and cab)
+      if (cat === 'truck') {
+        return '<svg width="26" height="54" viewBox="0 0 26 54" fill="none">' +
+          '<rect x="0" y="8" width="2.5" height="7" rx="1.2" fill="#0F172A"/>' +
+          '<rect x="23.5" y="8" width="2.5" height="7" rx="1.2" fill="#0F172A"/>' +
+          '<rect x="0" y="36" width="2.5" height="7" rx="1.2" fill="#0F172A"/>' +
+          '<rect x="23.5" y="36" width="2.5" height="7" rx="1.2" fill="#0F172A"/>' +
+          '<rect x="0" y="44" width="2.5" height="7" rx="1.2" fill="#0F172A"/>' +
+          '<rect x="23.5" y="44" width="2.5" height="7" rx="1.2" fill="#0F172A"/>' +
+          // Trailer Container
+          '<rect x="2" y="17" width="22" height="35" rx="3" fill="' + color + '" stroke="#FFFFFF" stroke-width="1.2"/>' +
+          '<line x1="4" y1="24" x2="22" y2="24" stroke="rgba(255,255,255,0.4)" stroke-width="1"/>' +
+          '<line x1="4" y1="32" x2="22" y2="32" stroke="rgba(255,255,255,0.4)" stroke-width="1"/>' +
+          '<line x1="4" y1="40" x2="22" y2="40" stroke="rgba(255,255,255,0.4)" stroke-width="1"/>' +
+          '<line x1="4" y1="48" x2="22" y2="48" stroke="rgba(255,255,255,0.4)" stroke-width="1"/>' +
+          // Cab
+          '<rect x="3" y="2" width="20" height="14" rx="3.5" fill="' + color + '" stroke="#FFFFFF" stroke-width="1.2"/>' +
+          '<path d="M5 6.5 Q13 4.5 21 6.5 L20.5 9.5 Q13 8 5.5 9.5 Z" fill="#0F172A" opacity="0.85"/>' +
+          (isMoving ? '<circle cx="5" cy="3" r="1.5" fill="#FEF08A"/><circle cx="21" cy="3" r="1.5" fill="#FEF08A"/>' : '') +
+        '</svg>';
+      }
+
+      // 2. BUS (Long commuter bus with roof vents and wide windshield)
+      if (cat === 'bus') {
+        return '<svg width="24" height="52" viewBox="0 0 24 52" fill="none">' +
+          '<rect x="0" y="8" width="2.5" height="7" rx="1.2" fill="#0F172A"/>' +
+          '<rect x="21.5" y="8" width="2.5" height="7" rx="1.2" fill="#0F172A"/>' +
+          '<rect x="0" y="38" width="2.5" height="7" rx="1.2" fill="#0F172A"/>' +
+          '<rect x="21.5" y="38" width="2.5" height="7" rx="1.2" fill="#0F172A"/>' +
+          '<rect x="2" y="2" width="20" height="48" rx="4" fill="' + color + '" stroke="#FFFFFF" stroke-width="1.2"/>' +
+          '<path d="M4.5 5.5 Q12 4 19.5 5.5 L19 9 Q12 7.5 5 9 Z" fill="#0F172A" opacity="0.85"/>' +
+          '<rect x="6.5" y="19" width="11" height="15" rx="2" fill="rgba(255,255,255,0.25)" stroke="rgba(255,255,255,0.5)" stroke-width="0.8"/>' +
+          (isMoving ? '<circle cx="4.5" cy="3" r="1.5" fill="#FEF08A"/><circle cx="19.5" cy="3" r="1.5" fill="#FEF08A"/>' : '') +
+        '</svg>';
+      }
+
+      // 3. MOTORCYCLE / BIKE
+      if (cat === 'motorcycle' || cat === 'bike') {
+        return '<svg width="18" height="38" viewBox="0 0 18 38" fill="none">' +
+          '<rect x="7" y="2" width="4" height="10" rx="2" fill="#0F172A"/>' +
+          '<rect x="7" y="24" width="4" height="12" rx="2" fill="#0F172A"/>' +
+          '<rect x="2" y="9" width="14" height="2.5" rx="1" fill="#475569"/>' +
+          '<circle cx="2" cy="10" r="1.5" fill="#0F172A"/>' +
+          '<circle cx="16" cy="10" r="1.5" fill="#0F172A"/>' +
+          '<ellipse cx="9" cy="18" rx="4" ry="6.5" fill="' + color + '" stroke="#FFFFFF" stroke-width="1.2"/>' +
+          (isMoving ? '<circle cx="9" cy="3" r="1.5" fill="#FEF08A"/>' : '') +
+        '</svg>';
+      }
+
+      // 4. VAN / PICKUP
+      if (cat === 'van' || cat === 'pickup') {
+        return '<svg width="22" height="44" viewBox="0 0 22 44" fill="none">' +
+          '<rect x="0" y="7" width="2.5" height="6" rx="1" fill="#0F172A"/>' +
+          '<rect x="19.5" y="7" width="2.5" height="6" rx="1" fill="#0F172A"/>' +
+          '<rect x="0" y="30" width="2.5" height="6" rx="1" fill="#0F172A"/>' +
+          '<rect x="19.5" y="30" width="2.5" height="6" rx="1" fill="#0F172A"/>' +
+          '<rect x="2" y="2" width="18" height="40" rx="4" fill="' + color + '" stroke="#FFFFFF" stroke-width="1.2"/>' +
+          '<path d="M4.5 9.5 Q11 7 17.5 9.5 L17 13.5 Q11 11.5 5 13.5 Z" fill="#0F172A" opacity="0.85"/>' +
+          '<line x1="4.5" y1="20" x2="17.5" y2="20" stroke="rgba(255,255,255,0.4)" stroke-width="1"/>' +
+          '<line x1="4.5" y1="27" x2="17.5" y2="27" stroke="rgba(255,255,255,0.4)" stroke-width="1"/>' +
+          (isMoving ? '<circle cx="4.5" cy="3" r="1.5" fill="#FEF08A"/><circle cx="17.5" cy="3" r="1.5" fill="#FEF08A"/>' : '') +
+        '</svg>';
+      }
+
+      // 5. DEFAULT: Top-down Real Sedan / Car
+      return '<svg width="22" height="42" viewBox="0 0 22 42" fill="none">' +
+        // Tires on 4 corners
+        '<rect x="0" y="6" width="2.5" height="6" rx="1.2" fill="#0F172A"/>' +
+        '<rect x="19.5" y="6" width="2.5" height="6" rx="1.2" fill="#0F172A"/>' +
+        '<rect x="0" y="28" width="2.5" height="6" rx="1.2" fill="#0F172A"/>' +
+        '<rect x="19.5" y="28" width="2.5" height="6" rx="1.2" fill="#0F172A"/>' +
+        // Aerodynamic car body
+        '<rect x="2" y="2" width="18" height="38" rx="5" fill="' + color + '" stroke="#FFFFFF" stroke-width="1.3"/>' +
+        // Front Windshield
+        '<path d="M4.5 11 Q11 8.5 17.5 11 L16.5 15.5 Q11 13.5 5.5 15.5 Z" fill="#0F172A" opacity="0.85"/>' +
+        // Roof Panel
+        '<rect x="5" y="15.5" width="12" height="11" rx="2" fill="rgba(255,255,255,0.22)" stroke="rgba(255,255,255,0.35)" stroke-width="0.8"/>' +
+        // Rear Windshield
+        '<path d="M5.5 26.5 Q11 28.5 16.5 26.5 L17 30 Q11 31.5 5 30 Z" fill="#0F172A" opacity="0.85"/>' +
+        // Front Headlights (Glow when moving)
+        (isMoving ? '<circle cx="4.5" cy="3" r="1.5" fill="#FEF08A"/><circle cx="17.5" cy="3" r="1.5" fill="#FEF08A"/>' : '') +
+        // Red Taillights
+        '<rect x="3.5" y="38.5" width="2.5" height="1.2" rx="0.6" fill="#EF4444"/>' +
+        '<rect x="16" y="38.5" width="2.5" height="1.2" rx="0.6" fill="#EF4444"/>' +
+      '</svg>';
+    }
+
+    function createMarkerHtml(m) {
+      var isMoving = (m.speedKmh > 0);
+      var selectedRing = m.isSelected
+        ? '<div class="radar-beacon"></div>'
+        : '';
+
+      return '<div class="real-vehicle-marker" id="veh-' + m.id + '">' +
+        selectedRing +
+        '<div class="vehicle-rotator" style="transform: rotate(' + (m.course || 0) + 'deg);">' +
+          getVehicleSvg(m.category, m.color, isMoving) +
         '</div>' +
-        '<div class="marker-label">' + m.name + '</div>' +
+        '<div class="vehicle-plate-pill ' + (m.isSelected ? 'selected-plate' : '') + '">' +
+          '<span class="plate-name">' + m.name + '</span>' +
+          (isMoving ? '<span class="plate-speed">' + m.speed + '</span>' : '') +
+        '</div>' +
       '</div>';
     }
 
@@ -188,35 +305,57 @@ const LEAFLET_STATIC_HTML = `
           var meta = markersMeta[m.id];
 
           if (existing) {
-            // ONLY move coordinates — CSS transition will glide the vehicle smoothly!
+            // ONLY move coordinates — 3.4s CSS transition glides the vehicle smoothly along the road!
             existing.setLatLng(latlng);
 
             // If rotation, color, selection changed, update icon
-            if (!meta || meta.course !== m.course || meta.isSelected !== m.isSelected || meta.color !== m.color || meta.name !== m.name) {
+            if (
+              !meta ||
+              meta.course !== m.course ||
+              meta.isSelected !== m.isSelected ||
+              meta.color !== m.color ||
+              meta.name !== m.name ||
+              meta.category !== m.category ||
+              meta.speedKmh !== m.speedKmh
+            ) {
               existing.setIcon(L.divIcon({
                 className: 'custom-marker',
                 html: createMarkerHtml(m),
-                iconSize: [40, 40],
-                iconAnchor: [20, 20],
-                popupAnchor: [0, -24]
+                iconSize: [44, 56],
+                iconAnchor: [22, 28],
+                popupAnchor: [0, -28]
               }));
-              markersMeta[m.id] = { course: m.course, isSelected: m.isSelected, color: m.color, name: m.name };
+              markersMeta[m.id] = {
+                course: m.course,
+                isSelected: m.isSelected,
+                color: m.color,
+                name: m.name,
+                category: m.category,
+                speedKmh: m.speedKmh,
+              };
             }
           } else {
             // New marker
             var icon = L.divIcon({
               className: 'custom-marker',
               html: createMarkerHtml(m),
-              iconSize: [40, 40],
-              iconAnchor: [20, 20],
-              popupAnchor: [0, -24]
+              iconSize: [44, 56],
+              iconAnchor: [22, 28],
+              popupAnchor: [0, -28]
             });
             var marker = L.marker(latlng, { icon: icon }).addTo(map);
             marker.on('click', function() {
               emitSelect(m.id);
             });
             markersMap[m.id] = marker;
-            markersMeta[m.id] = { course: m.course, isSelected: m.isSelected, color: m.color, name: m.name };
+            markersMeta[m.id] = {
+              course: m.course,
+              isSelected: m.isSelected,
+              color: m.color,
+              name: m.name,
+              category: m.category,
+              speedKmh: m.speedKmh,
+            };
           }
         });
 
@@ -278,13 +417,13 @@ const LEAFLET_STATIC_HTML = `
         var pLatlng = [data.playbackPosition.latitude, data.playbackPosition.longitude];
         var pIcon = L.divIcon({
           className: 'custom-marker',
-          html: '<div class="marker-pin" style="background:#2563EB; border:2.5px solid white;">' +
-            '<div class="marker-rotator" style="transform: rotate(' + (data.playbackPosition.course || 0) + 'deg);">' +
-              '<div class="marker-arrow" style="border-bottom: 10px solid white;"></div>' +
+          html: '<div class="real-vehicle-marker">' +
+            '<div class="vehicle-rotator" style="transform: rotate(' + (data.playbackPosition.course || 0) + 'deg);">' +
+              getVehicleSvg('car', '#2563EB', true) +
             '</div>' +
           '</div>',
-          iconSize: [32, 32],
-          iconAnchor: [16, 16]
+          iconSize: [44, 56],
+          iconAnchor: [22, 28]
         });
 
         if (playbackMarker) {
@@ -326,7 +465,7 @@ export function MapViewer({
   const iframeRef = useRef<any>(null);
   const isMapReadyRef = useRef<boolean>(false);
 
-  // Prepare markers data payload
+  // Prepare markers data payload with real category and calculated speed
   const markers = useMemo(() => {
     return devices
       .map((dev) => {
@@ -334,13 +473,16 @@ export function MapViewer({
         if (!pos || !pos.latitude || !pos.longitude) return null;
         const status = getDeviceOperationalStatus(dev, pos);
         const color = getStatusColor(status);
+        const speedKmh = pos.speed ? Math.round(pos.speed * 1.852) : 0;
         return {
           id: dev.id,
           name: dev.name,
+          category: dev.category || 'car',
           lat: pos.latitude,
           lng: pos.longitude,
           course: pos.course || 0,
-          speed: formatSpeed(pos.speed),
+          speed: speedKmh > 0 ? `${speedKmh} km/h` : '0 km/h',
+          speedKmh,
           status,
           color,
           isSelected: dev.id === selectedDeviceId,
