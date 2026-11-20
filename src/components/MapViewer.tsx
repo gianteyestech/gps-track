@@ -18,7 +18,7 @@ interface MapViewerProps {
 
 const CustomWebView = WebView as any;
 
-// Static Leaflet HTML template — NEVER changes across renders so the iframe/WebView is never reloaded!
+// Static Leaflet HTML template with Uber-grade 60fps dead-reckoning motion engine
 const LEAFLET_STATIC_HTML = `
 <!DOCTYPE html>
 <html>
@@ -41,9 +41,7 @@ const LEAFLET_STATIC_HTML = `
       background: none;
       border: none;
     }
-    /* Smooth Continuous Interpolation: 3.4s linear motion matches 3.5s telemetry heartbeat */
     .leaflet-marker-icon {
-      transition: transform 3.4s linear !important;
       will-change: transform;
     }
     .real-vehicle-marker {
@@ -58,9 +56,9 @@ const LEAFLET_STATIC_HTML = `
       display: flex;
       align-items: center;
       justify-content: center;
-      transition: transform 1.0s cubic-bezier(0.4, 0, 0.2, 1);
       cursor: pointer;
       filter: drop-shadow(0 3px 6px rgba(0,0,0,0.38));
+      will-change: transform;
     }
     /* Selected Vehicle Pulsing Beacon */
     .radar-beacon {
@@ -152,6 +150,7 @@ const LEAFLET_STATIC_HTML = `
 
     var markersMap = {};
     var markersMeta = {};
+    var vehiclesState = {}; // Real-time 60fps physics & dead-reckoning state
     var routePolyline = null;
     var playbackMarker = null;
     var mapInitialized = false;
@@ -168,11 +167,19 @@ const LEAFLET_STATIC_HTML = `
       }, 3000);
     });
 
-    // Generate authentic top-down realistic vehicle graphics matching category
+    // Helper: Shortest angular distance interpolation for realistic steering
+    function lerpAngle(a, b, t) {
+      var diff = (b - a) % 360;
+      if (diff < -180) diff += 360;
+      if (diff > 180) diff -= 360;
+      return a + diff * t;
+    }
+
+    // Top-down realistic vehicle SVGs
     function getVehicleSvg(category, color, isMoving) {
       var cat = (category || 'car').toLowerCase();
 
-      // 1. TRUCK (Semi / Cargo Truck with container ribs and cab)
+      // 1. TRUCK (Semi / Cargo Truck)
       if (cat === 'truck') {
         return '<svg width="26" height="54" viewBox="0 0 26 54" fill="none">' +
           '<rect x="0" y="8" width="2.5" height="7" rx="1.2" fill="#0F172A"/>' +
@@ -181,20 +188,18 @@ const LEAFLET_STATIC_HTML = `
           '<rect x="23.5" y="36" width="2.5" height="7" rx="1.2" fill="#0F172A"/>' +
           '<rect x="0" y="44" width="2.5" height="7" rx="1.2" fill="#0F172A"/>' +
           '<rect x="23.5" y="44" width="2.5" height="7" rx="1.2" fill="#0F172A"/>' +
-          // Trailer Container
           '<rect x="2" y="17" width="22" height="35" rx="3" fill="' + color + '" stroke="#FFFFFF" stroke-width="1.2"/>' +
           '<line x1="4" y1="24" x2="22" y2="24" stroke="rgba(255,255,255,0.4)" stroke-width="1"/>' +
           '<line x1="4" y1="32" x2="22" y2="32" stroke="rgba(255,255,255,0.4)" stroke-width="1"/>' +
           '<line x1="4" y1="40" x2="22" y2="40" stroke="rgba(255,255,255,0.4)" stroke-width="1"/>' +
           '<line x1="4" y1="48" x2="22" y2="48" stroke="rgba(255,255,255,0.4)" stroke-width="1"/>' +
-          // Cab
           '<rect x="3" y="2" width="20" height="14" rx="3.5" fill="' + color + '" stroke="#FFFFFF" stroke-width="1.2"/>' +
           '<path d="M5 6.5 Q13 4.5 21 6.5 L20.5 9.5 Q13 8 5.5 9.5 Z" fill="#0F172A" opacity="0.85"/>' +
           (isMoving ? '<circle cx="5" cy="3" r="1.5" fill="#FEF08A"/><circle cx="21" cy="3" r="1.5" fill="#FEF08A"/>' : '') +
         '</svg>';
       }
 
-      // 2. BUS (Long commuter bus with roof vents and wide windshield)
+      // 2. BUS
       if (cat === 'bus') {
         return '<svg width="24" height="52" viewBox="0 0 24 52" fill="none">' +
           '<rect x="0" y="8" width="2.5" height="7" rx="1.2" fill="#0F172A"/>' +
@@ -238,22 +243,15 @@ const LEAFLET_STATIC_HTML = `
 
       // 5. DEFAULT: Top-down Real Sedan / Car
       return '<svg width="22" height="42" viewBox="0 0 22 42" fill="none">' +
-        // Tires on 4 corners
         '<rect x="0" y="6" width="2.5" height="6" rx="1.2" fill="#0F172A"/>' +
         '<rect x="19.5" y="6" width="2.5" height="6" rx="1.2" fill="#0F172A"/>' +
         '<rect x="0" y="28" width="2.5" height="6" rx="1.2" fill="#0F172A"/>' +
         '<rect x="19.5" y="28" width="2.5" height="6" rx="1.2" fill="#0F172A"/>' +
-        // Aerodynamic car body
         '<rect x="2" y="2" width="18" height="38" rx="5" fill="' + color + '" stroke="#FFFFFF" stroke-width="1.3"/>' +
-        // Front Windshield
         '<path d="M4.5 11 Q11 8.5 17.5 11 L16.5 15.5 Q11 13.5 5.5 15.5 Z" fill="#0F172A" opacity="0.85"/>' +
-        // Roof Panel
         '<rect x="5" y="15.5" width="12" height="11" rx="2" fill="rgba(255,255,255,0.22)" stroke="rgba(255,255,255,0.35)" stroke-width="0.8"/>' +
-        // Rear Windshield
         '<path d="M5.5 26.5 Q11 28.5 16.5 26.5 L17 30 Q11 31.5 5 30 Z" fill="#0F172A" opacity="0.85"/>' +
-        // Front Headlights (Glow when moving)
         (isMoving ? '<circle cx="4.5" cy="3" r="1.5" fill="#FEF08A"/><circle cx="17.5" cy="3" r="1.5" fill="#FEF08A"/>' : '') +
-        // Red Taillights
         '<rect x="3.5" y="38.5" width="2.5" height="1.2" rx="0.6" fill="#EF4444"/>' +
         '<rect x="16" y="38.5" width="2.5" height="1.2" rx="0.6" fill="#EF4444"/>' +
       '</svg>';
@@ -285,6 +283,76 @@ const LEAFLET_STATIC_HTML = `
       }
     }
 
+    // =========================================================================
+    // Uber-Style 60 FPS Dead-Reckoning Continuous Drive Loop
+    // Vehicles move continuously forward even between server heartbeats!
+    // =========================================================================
+    var lastAnimTime = performance.now();
+
+    function animateVehicles(now) {
+      var dt = (now - lastAnimTime) / 1000;
+      lastAnimTime = now;
+      if (dt > 0.25) dt = 0.05; // clamp when switching browser tabs
+
+      Object.keys(vehiclesState).forEach(function(id) {
+        var vs = vehiclesState[id];
+        if (!vs || !vs.marker) return;
+
+        // Smooth acceleration/deceleration
+        vs.currentSpeedMps += (vs.targetSpeedMps - vs.currentSpeedMps) * Math.min(dt * 3.5, 0.25);
+
+        // Smooth steering angle
+        vs.currentCourse = lerpAngle(vs.currentCourse, vs.targetCourse, Math.min(dt * 4.5, 0.25));
+
+        if (vs.currentSpeedMps > 0.4) {
+          // 1. Advance vehicle forward along bearing at its exact speed (continuous Uber drive)
+          var rad = (vs.currentCourse * Math.PI) / 180;
+          var dist = vs.currentSpeedMps * dt;
+          var latRad = (vs.currentLat * Math.PI) / 180;
+          var cosLat = Math.cos(latRad) || 1;
+
+          var dLat = (dist * Math.cos(rad)) / 111139;
+          var dLng = (dist * Math.sin(rad)) / (111139 * cosLat);
+
+          vs.currentLat += dLat;
+          vs.currentLng += dLng;
+
+          // 2. Gentle convergence pull towards actual target GPS fix to maintain lane precision
+          var errLat = vs.targetLat - vs.currentLat;
+          var errLng = vs.targetLng - vs.currentLng;
+          var pull = Math.min(dt * 1.5, 0.12);
+          vs.currentLat += errLat * pull;
+          vs.currentLng += errLng * pull;
+
+          // 60fps hardware update to Leaflet marker
+          vs.marker.setLatLng([vs.currentLat, vs.currentLng]);
+        } else {
+          // Vehicle stationary: gently settle onto exact parking spot
+          var errLat = vs.targetLat - vs.currentLat;
+          var errLng = vs.targetLng - vs.currentLng;
+          if (Math.abs(errLat) > 0.0000005 || Math.abs(errLng) > 0.0000005) {
+            vs.currentLat += errLat * Math.min(dt * 5.0, 0.25);
+            vs.currentLng += errLng * Math.min(dt * 5.0, 0.25);
+            vs.marker.setLatLng([vs.currentLat, vs.currentLng]);
+          }
+        }
+
+        // Live rotation update for car steering
+        var el = vs.marker.getElement();
+        if (el) {
+          var rot = el.querySelector('.vehicle-rotator');
+          if (rot) {
+            rot.style.transform = 'rotate(' + vs.currentCourse.toFixed(1) + 'deg)';
+          }
+        }
+      });
+
+      requestAnimationFrame(animateVehicles);
+    }
+
+    // Start 60fps animation engine immediately
+    requestAnimationFrame(animateVehicles);
+
     window.updateData = function(data) {
       if (!data) return;
 
@@ -303,15 +371,29 @@ const LEAFLET_STATIC_HTML = `
 
           var existing = markersMap[m.id];
           var meta = markersMeta[m.id];
+          var vs = vehiclesState[m.id];
 
-          if (existing) {
-            // ONLY move coordinates — 3.4s CSS transition glides the vehicle smoothly along the road!
-            existing.setLatLng(latlng);
+          if (existing && vs) {
+            // Update physics targets
+            vs.targetLat = m.lat;
+            vs.targetLng = m.lng;
+            vs.targetCourse = m.course || 0;
+            vs.targetSpeedMps = ((m.speedKmh || 0) * 1000) / 3600;
 
-            // If rotation, color, selection changed, update icon
+            // If teleport/initial jump > 400m, snap directly
+            var dLatDeg = Math.abs(vs.targetLat - vs.currentLat);
+            var dLngDeg = Math.abs(vs.targetLng - vs.currentLng);
+            if (dLatDeg > 0.004 || dLngDeg > 0.004) {
+              vs.currentLat = vs.targetLat;
+              vs.currentLng = vs.targetLng;
+              vs.currentCourse = vs.targetCourse;
+              vs.currentSpeedMps = vs.targetSpeedMps;
+              vs.marker.setLatLng([vs.currentLat, vs.currentLng]);
+            }
+
+            // Update DOM attributes if category, selection, or status color changed
             if (
               !meta ||
-              meta.course !== m.course ||
               meta.isSelected !== m.isSelected ||
               meta.color !== m.color ||
               meta.name !== m.name ||
@@ -335,7 +417,7 @@ const LEAFLET_STATIC_HTML = `
               };
             }
           } else {
-            // New marker
+            // New marker initialization
             var icon = L.divIcon({
               className: 'custom-marker',
               html: createMarkerHtml(m),
@@ -356,6 +438,18 @@ const LEAFLET_STATIC_HTML = `
               category: m.category,
               speedKmh: m.speedKmh,
             };
+            // Register in dead-reckoning state
+            vehiclesState[m.id] = {
+              marker: marker,
+              currentLat: m.lat,
+              currentLng: m.lng,
+              targetLat: m.lat,
+              targetLng: m.lng,
+              currentCourse: m.course || 0,
+              targetCourse: m.course || 0,
+              currentSpeedMps: ((m.speedKmh || 0) * 1000) / 3600,
+              targetSpeedMps: ((m.speedKmh || 0) * 1000) / 3600,
+            };
           }
         });
 
@@ -365,12 +459,12 @@ const LEAFLET_STATIC_HTML = `
             map.removeLayer(markersMap[id]);
             delete markersMap[id];
             delete markersMeta[id];
+            delete vehiclesState[id];
           }
         });
 
         // 3. Viewport control — NEVER resets or flickers on normal 3.5s heartbeats!
         if (!mapInitialized) {
-          // Initial fit once
           if (data.selectedDeviceId && markersMap[data.selectedDeviceId]) {
             map.setView(markersMap[data.selectedDeviceId].getLatLng(), 15);
           } else if (bounds.length > 0) {
@@ -379,14 +473,12 @@ const LEAFLET_STATIC_HTML = `
           mapInitialized = true;
           lastSelectedId = data.selectedDeviceId;
         } else {
-          // If user clicked a different vehicle in the strip
           if (data.selectedDeviceId && data.selectedDeviceId !== lastSelectedId) {
             lastSelectedId = data.selectedDeviceId;
             if (markersMap[data.selectedDeviceId]) {
               map.panTo(markersMap[data.selectedDeviceId].getLatLng(), { animate: true, duration: 0.5 });
             }
           } else if (data.forceRecenter) {
-            // User explicitly tapped the Crosshairs recenter button
             if (data.selectedDeviceId && markersMap[data.selectedDeviceId]) {
               map.setView(markersMap[data.selectedDeviceId].getLatLng(), 15, { animate: true });
             } else if (bounds.length > 0) {
