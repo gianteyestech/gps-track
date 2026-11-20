@@ -103,6 +103,10 @@ export function TraccarProvider({ children }: { children: React.ReactNode }) {
 
   const seenEventsRef = React.useRef<Set<number>>(new Set());
   const isInitialEventsLoadedRef = React.useRef<boolean>(false);
+  const devicesRef = React.useRef<Device[]>(devices);
+  useEffect(() => {
+    devicesRef.current = devices;
+  }, [devices]);
 
   // Listen to WebSocket updates
   useEffect(() => {
@@ -166,12 +170,13 @@ export function TraccarProvider({ children }: { children: React.ReactNode }) {
       isPolling = true;
 
       try {
-        // 1. Live Positions Sync
+        // 1. Live Positions Sync & Real-Time Telemetry Event Alerts
         const latestPositions = await traccarApi.getPositions();
         if (latestPositions && latestPositions.length > 0) {
           setPositions((prev) => {
             const updated = { ...prev };
             let changed = false;
+
             latestPositions.forEach((pos) => {
               const old = prev[pos.deviceId];
               if (
@@ -184,40 +189,93 @@ export function TraccarProvider({ children }: { children: React.ReactNode }) {
               ) {
                 updated[pos.deviceId] = pos;
                 changed = true;
+
+                // Live Telemetry Event Detection (Ignition ON/OFF, Moving, Parked, Overspeed)
+                if (old && isInitialEventsLoadedRef.current) {
+                  const targetDev = devicesRef.current.find((d) => d.id === pos.deviceId);
+                  const devName = targetDev?.name || `Vehicle #${pos.deviceId}`;
+
+                  // A. Ignition Turned ON / OFF
+                  const oldIgn = old.attributes?.ignition;
+                  const newIgn = pos.attributes?.ignition;
+                  if (oldIgn !== undefined && newIgn !== undefined && oldIgn !== newIgn) {
+                    notificationService.notifyEvent(
+                      {
+                        id: Date.now(),
+                        deviceId: pos.deviceId,
+                        type: newIgn ? 'ignitionOn' : 'ignitionOff',
+                        serverTime: pos.fixTime || new Date().toISOString(),
+                        attributes: {},
+                      },
+                      devName
+                    );
+                  }
+
+                  // B. Motion & Overspeed Alerts
+                  const oldSpeedKmh = old.speed ? Math.round(old.speed * 1.852) : 0;
+                  const newSpeedKmh = pos.speed ? Math.round(pos.speed * 1.852) : 0;
+                  if (oldSpeedKmh < 3 && newSpeedKmh >= 8) {
+                    notificationService.notifyEvent(
+                      {
+                        id: Date.now(),
+                        deviceId: pos.deviceId,
+                        type: 'deviceMoving',
+                        serverTime: pos.fixTime || new Date().toISOString(),
+                        attributes: { speed: newSpeedKmh },
+                      },
+                      devName
+                    );
+                  } else if (oldSpeedKmh >= 8 && newSpeedKmh === 0) {
+                    notificationService.notifyEvent(
+                      {
+                        id: Date.now(),
+                        deviceId: pos.deviceId,
+                        type: 'deviceStopped',
+                        serverTime: pos.fixTime || new Date().toISOString(),
+                        attributes: {},
+                      },
+                      devName
+                    );
+                  } else if (oldSpeedKmh <= 80 && newSpeedKmh > 80) {
+                    notificationService.notifyEvent(
+                      {
+                        id: Date.now(),
+                        deviceId: pos.deviceId,
+                        type: 'deviceOverspeed',
+                        serverTime: pos.fixTime || new Date().toISOString(),
+                        attributes: { speed: newSpeedKmh },
+                      },
+                      devName
+                    );
+                  }
+                }
               }
             });
+
+            isInitialEventsLoadedRef.current = true;
             return changed ? updated : prev;
           });
         }
 
-        // 2. Real-Time Events & Geofence Alarms Poller (past 1 hour to now)
-        const now = new Date();
-        const past10Min = new Date(now.getTime() - 60 * 60 * 1000).toISOString();
-        const recentEvents = await traccarApi.getEvents(undefined, past10Min, now.toISOString());
+        // 2. Real-Time Server Events Poller (Safe query for selected or active vehicle)
+        if (selectedDeviceId) {
+          try {
+            const now = new Date();
+            const past10Min = new Date(now.getTime() - 60 * 60 * 1000).toISOString();
+            const recentEvents = await traccarApi.getEvents(selectedDeviceId, past10Min, now.toISOString());
 
-        if (recentEvents && recentEvents.length > 0) {
-          if (!isInitialEventsLoadedRef.current) {
-            // First time loading: record existing events so we don't spam old history
-            recentEvents.forEach((ev) => seenEventsRef.current.add(ev.id));
-            setEvents(recentEvents.slice(0, 100));
-            isInitialEventsLoadedRef.current = true;
-          } else {
-            // Subsequent polls: only trigger push banner/sound for newly reported events
-            recentEvents.forEach((ev) => {
-              if (!seenEventsRef.current.has(ev.id)) {
-                seenEventsRef.current.add(ev.id);
-                setEvents((prev) => [ev, ...prev].slice(0, 100));
+            if (recentEvents && recentEvents.length > 0) {
+              recentEvents.forEach((ev) => {
+                if (!seenEventsRef.current.has(ev.id)) {
+                  seenEventsRef.current.add(ev.id);
+                  setEvents((prev) => [ev, ...prev].slice(0, 100));
 
-                setDevices((currentDevs) => {
-                  const targetDev = currentDevs.find((d) => d.id === ev.deviceId);
+                  const targetDev = devicesRef.current.find((d) => d.id === ev.deviceId);
                   notificationService.notifyEvent(ev, targetDev?.name || `Vehicle #${ev.deviceId}`);
-                  return currentDevs;
-                });
-              }
-            });
-          }
-        } else {
-          isInitialEventsLoadedRef.current = true;
+                }
+              });
+            }
+          } catch {}
         }
       } catch (e) {
         // Silently continue polling on next tick

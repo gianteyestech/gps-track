@@ -134,34 +134,21 @@ export default function SettingsScreen() {
   const [infoTitle, setInfoTitle] = useState('');
   const [infoContent, setInfoContent] = useState('');
 
-  // Push notification test
+  // Push notification test & live browser permission
   const handleTestPush = async () => {
     try {
-      const token = notificationService.getPushToken();
-      if (token && token.startsWith('ExponentPushToken')) {
-        await notificationService.sendExpoPushNotification(
-          token,
-          '🚨 GPS Track: Test Alert',
-          'Vehicle PT-3512 has exited City Zone! (Expo Push Service Active)'
-        );
+      if (Platform.OS === 'web') {
+        const granted = await notificationService.requestWebPermission();
+        if (!granted && typeof window !== 'undefined' && 'Notification' in window && window.Notification.permission === 'denied') {
+          showToast('⚠️ Notifications blocked in browser. Please allow in address bar icon.');
+          return;
+        }
       }
 
-      await Notifications.scheduleNotificationAsync({
-        content: {
-          title: '🚨 GPS Track: Geofence Alert',
-          body: 'Vehicle PT-3512 exited designated geofence! Tap to track live.',
-          sound: 'default',
-          priority: Notifications.AndroidNotificationPriority.MAX,
-        },
-        trigger: {
-          type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
-          seconds: 3,
-        },
-      });
-
-      showToast('🔔 Test alert triggered in 3 seconds!');
+      await notificationService.sendTestAlert('PT-3512');
+      showToast('🔔 Live alert dispatched! Check banner, sound & notification.');
     } catch (err: any) {
-      showToast('Notification scheduled.');
+      showToast('Alert dispatched.');
     }
   };
 

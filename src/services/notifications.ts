@@ -29,17 +29,37 @@ class NotificationService {
     };
   }
 
+  public isPermissionGranted(): boolean {
+    if (Platform.OS === 'web') {
+      return typeof window !== 'undefined' && 'Notification' in window && window.Notification.permission === 'granted';
+    }
+    return !!this.pushToken;
+  }
+
+  public async requestWebPermission(): Promise<boolean> {
+    if (Platform.OS === 'web' && typeof window !== 'undefined' && 'Notification' in window) {
+      try {
+        const result = await window.Notification.requestPermission();
+        return result === 'granted';
+      } catch (e) {
+        console.warn('[Push] Error requesting web permission:', e);
+        return false;
+      }
+    }
+    return false;
+  }
+
   public async registerForPushNotifications(currentUser?: User | null): Promise<string | null> {
-    // 1. Web Browser Notifications (Chrome / Edge / Firefox on Windows)
+    // 1. Web Browser Notifications (Chrome / Edge / Firefox on Windows & Safari PWA on iOS)
     if (Platform.OS === 'web') {
       try {
         if (typeof window !== 'undefined' && 'Notification' in window) {
-          if (window.Notification.permission === 'default') {
-            await window.Notification.requestPermission();
+          if (window.Notification.permission === 'granted') {
+            console.log('[GPS Track] Web Notification permission is granted.');
           }
         }
       } catch (err) {
-        console.warn('Web notification permission error:', err);
+        console.warn('Web notification check error:', err);
       }
       return 'web-client';
     }
@@ -208,6 +228,14 @@ class NotificationService {
         title = '🛑 SOS / Shock Alarm';
         body = `Urgent alert triggered by ${deviceName}!`;
         break;
+      case 'deviceMoving':
+        title = '🚗 Vehicle in Motion';
+        body = `${deviceName} started driving (${event.attributes?.speed || 'live'} km/h).`;
+        break;
+      case 'deviceStopped':
+        title = '🅿️ Vehicle Parked';
+        body = `${deviceName} has stopped and parked safely.`;
+        break;
       case 'ignitionOn':
         title = '🔑 Ignition Turned ON';
         body = `${deviceName} engine was started.`;
@@ -277,6 +305,19 @@ class NotificationService {
         console.warn('Mobile notification error:', err);
       }
     }
+  }
+
+  // Trigger an immediate instant test alert across audio, banner, and browser/system push
+  public async sendTestAlert(deviceName: string = 'PT-3512'): Promise<void> {
+    const testEvent: Event = {
+      id: Date.now(),
+      deviceId: 99999,
+      type: 'geofenceExit',
+      serverTime: new Date().toISOString(),
+      attributes: {},
+    };
+
+    await this.notifyEvent(testEvent, deviceName);
   }
 }
 
