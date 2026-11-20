@@ -247,7 +247,7 @@ export function PwaInstallBanner() {
 const styles = StyleSheet.create({
   bannerContainer: {
     position: 'absolute',
-    bottom: 20,
+    bottom: 78,
     left: 16,
     right: 16,
     backgroundColor: '#1E293B',
