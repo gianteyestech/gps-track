@@ -83,7 +83,7 @@ export default function HomeScreen() {
 
           <TouchableOpacity
             style={styles.actionCard}
-            onPress={() => router.push('/reports/1')}
+            onPress={() => router.push(devices.length > 0 ? `/reports/${devices[0].id}` : '/reports/0')}
           >
             <View style={[styles.iconWrap, { backgroundColor: '#FFFBEB' }]}>
               <MaterialCommunityIcons name="file-chart" size={26} color="#D97706" />
