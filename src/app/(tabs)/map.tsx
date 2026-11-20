@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   StyleSheet,
   View,
@@ -8,6 +8,9 @@ import {
   ScrollView,
   Share,
   Alert,
+  Platform,
+  Linking,
+  ActivityIndicator,
 } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
@@ -17,6 +20,7 @@ import { SpeedometerGauge } from '../../components/SpeedometerGauge';
 import { OdometerBox } from '../../components/OdometerBox';
 import { SendCommandModal } from '../../components/SendCommandModal';
 import { GTS_COLORS } from '../../constants/theme';
+import { calculateDistanceKm, estimateDriveTimeMinutes } from '../../utils/formatters';
 
 export default function LiveMapScreen() {
   const params = useLocalSearchParams<{ deviceId?: string }>();
@@ -32,12 +36,37 @@ export default function LiveMapScreen() {
   const [commandModalVisible, setCommandModalVisible] = useState<boolean>(false);
   const [isExpanded, setIsExpanded] = useState<boolean>(false);
 
+  // User live location & vehicle chase/track mode state
+  const [userLocation, setUserLocation] = useState<{ latitude: number; longitude: number; accuracy?: number } | null>(null);
+  const [isTrackMode, setIsTrackMode] = useState<boolean>(false);
+  const [isLocating, setIsLocating] = useState<boolean>(false);
+
   // Set device from navigation param if passed
-  React.useEffect(() => {
+  useEffect(() => {
     if (params.deviceId) {
       setSelectedDeviceId(parseInt(params.deviceId, 10));
     }
   }, [params.deviceId]);
+
+  // Watch user's live physical location in Web/PWA
+  useEffect(() => {
+    if (typeof window !== 'undefined' && 'geolocation' in navigator) {
+      const watchId = navigator.geolocation.watchPosition(
+        (pos) => {
+          setUserLocation({
+            latitude: pos.coords.latitude,
+            longitude: pos.coords.longitude,
+            accuracy: pos.coords.accuracy,
+          });
+        },
+        (err) => {
+          console.warn('Geolocation notice:', err.message);
+        },
+        { enableHighAccuracy: true, timeout: 20000, maximumAge: 10000 }
+      );
+      return () => navigator.geolocation.clearWatch(watchId);
+    }
+  }, []);
 
   // Active target vehicle
   const currentDevice =
@@ -64,10 +93,69 @@ export default function LiveMapScreen() {
       new Date(currentDevice.lastUpdate).toLocaleTimeString('en-US', { hour12: true })
     : 'No GPS fix yet';
 
+  // Real-time distance and driving ETA from User to Vehicle
+  const distanceToVehicle =
+    userLocation && currentPosition?.latitude && currentPosition?.longitude
+      ? calculateDistanceKm(
+          userLocation.latitude,
+          userLocation.longitude,
+          currentPosition.latitude,
+          currentPosition.longitude
+        )
+      : null;
+  const etaMinutes = distanceToVehicle !== null ? estimateDriveTimeMinutes(distanceToVehicle) : null;
+
   const cycleMapLayer = () => {
     if (mapLayer === 'osm') setMapLayer('satellite');
     else if (mapLayer === 'satellite') setMapLayer('dark');
     else setMapLayer('osm');
+  };
+
+  const toggleTrackMode = () => {
+    if (!isTrackMode && !userLocation) {
+      if (typeof window !== 'undefined' && 'geolocation' in navigator) {
+        setIsLocating(true);
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            setUserLocation({
+              latitude: pos.coords.latitude,
+              longitude: pos.coords.longitude,
+              accuracy: pos.coords.accuracy,
+            });
+            setIsLocating(false);
+            setIsTrackMode(true);
+            setRecenterTrigger((prev) => prev + 1);
+          },
+          (err) => {
+            setIsLocating(false);
+            Alert.alert(
+              'Location Access Needed',
+              'Please allow location access in your browser or device to see your position relative to this vehicle.'
+            );
+          },
+          { enableHighAccuracy: true }
+        );
+        return;
+      }
+    }
+    setIsTrackMode((prev) => !prev);
+    setRecenterTrigger((prev) => prev + 1);
+  };
+
+  const handleOpenDirections = () => {
+    if (!currentPosition?.latitude || !currentPosition?.longitude) {
+      Alert.alert('No Coordinates', 'Vehicle GPS fix is currently unavailable.');
+      return;
+    }
+    const originParam = userLocation
+      ? `&origin=${userLocation.latitude},${userLocation.longitude}`
+      : '';
+    const url = `https://www.google.com/maps/dir/?api=1${originParam}&destination=${currentPosition.latitude},${currentPosition.longitude}`;
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      window.open(url, '_blank');
+    } else {
+      Linking.openURL(url);
+    }
   };
 
   const handleShareLocation = async () => {
@@ -90,6 +178,8 @@ export default function LiveMapScreen() {
         onSelectDevice={(id) => setSelectedDeviceId(id)}
         mapLayer={mapLayer}
         forceRecenter={recenterTrigger}
+        userLocation={userLocation}
+        trackMode={isTrackMode}
       />
 
       {/* Top Status Header Banner matching Image 4 */}
@@ -109,7 +199,20 @@ export default function LiveMapScreen() {
             <Text style={styles.bannerSubTitle}>{formattedDate}</Text>
           </View>
 
-          <View style={{ width: 28 }} />
+          {/* Quick Track Mode Switch in Header */}
+          <TouchableOpacity
+            style={[styles.headerTrackBtn, isTrackMode && styles.headerTrackBtnActive]}
+            onPress={toggleTrackMode}
+          >
+            <MaterialCommunityIcons
+              name="human"
+              size={18}
+              color={isTrackMode ? '#FFFFFF' : '#F97316'}
+            />
+            <Text style={[styles.headerTrackText, isTrackMode && styles.headerTrackTextActive]}>
+              {isTrackMode ? 'Tracking' : 'Track'}
+            </Text>
+          </TouchableOpacity>
         </View>
 
         {/* Quick Vehicle Switcher Strip */}
@@ -148,6 +251,35 @@ export default function LiveMapScreen() {
               );
             })}
           </ScrollView>
+        )}
+
+        {/* Live Proximity / Relative Tracking Pill */}
+        {distanceToVehicle !== null && currentDevice && (
+          <View style={styles.proximityFloatingCard}>
+            <View style={styles.proximityLeft}>
+              <View style={styles.humanBadge}>
+                <MaterialCommunityIcons name="human" size={15} color="#FFFFFF" />
+              </View>
+              <MaterialCommunityIcons name="arrow-right-thin" size={18} color="#EA580C" />
+              <Text style={styles.proximityVehName} numberOfLines={1}>
+                {currentDevice.name}
+              </Text>
+            </View>
+
+            <View style={styles.proximityCenter}>
+              <Text style={styles.proximityDistText}>{distanceToVehicle} km</Text>
+              <Text style={styles.proximityEtaText}>~{etaMinutes} min away</Text>
+            </View>
+
+            <TouchableOpacity
+              style={styles.navigateBtn}
+              onPress={handleOpenDirections}
+              activeOpacity={0.8}
+            >
+              <MaterialCommunityIcons name="navigation-variant" size={14} color="#FFFFFF" />
+              <Text style={styles.navigateBtnText}>Directions</Text>
+            </TouchableOpacity>
+          </View>
         )}
       </SafeAreaView>
 
@@ -214,15 +346,10 @@ export default function LiveMapScreen() {
           <MaterialCommunityIcons name="traffic-light" size={22} color="#1E293B" />
         </TouchableOpacity>
 
-        {/* Navigation */}
+        {/* Navigation / Directions from You to Vehicle */}
         <TouchableOpacity
           style={styles.squareToolBtn}
-          onPress={() => {
-            if (currentPosition) {
-              const url = `https://www.google.com/maps/dir/?api=1&destination=${currentPosition.latitude},${currentPosition.longitude}`;
-              Alert.alert('Directions', `Navigating to ${currentDevice?.name}`);
-            }
-          }}
+          onPress={handleOpenDirections}
         >
           <MaterialCommunityIcons name="navigation" size={22} color="#1E293B" />
         </TouchableOpacity>
@@ -243,12 +370,23 @@ export default function LiveMapScreen() {
           <MaterialCommunityIcons name="ruler" size={22} color="#1E293B" />
         </TouchableOpacity>
 
-        {/* Street View / Person */}
+        {/* Human Icon / Track Vehicle Relative to My Location */}
         <TouchableOpacity
-          style={styles.squareToolBtn}
-          onPress={() => Alert.alert('Street View', 'Opening 360 panoramic view')}
+          style={[
+            styles.squareToolBtn,
+            isTrackMode && { backgroundColor: '#EA580C', borderColor: '#EA580C' },
+          ]}
+          onPress={toggleTrackMode}
         >
-          <MaterialCommunityIcons name="human" size={22} color="#1E293B" />
+          {isLocating ? (
+            <ActivityIndicator size="small" color={isTrackMode ? '#FFFFFF' : '#EA580C'} />
+          ) : (
+            <MaterialCommunityIcons
+              name="human"
+              size={24}
+              color={isTrackMode ? '#FFFFFF' : '#1E293B'}
+            />
+          )}
         </TouchableOpacity>
       </View>
 
@@ -637,6 +775,94 @@ const styles = StyleSheet.create({
     color: '#374151',
   },
   vehiclePillTextActive: {
+    color: '#FFFFFF',
+  },
+  headerTrackBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.4)',
+  },
+  headerTrackBtnActive: {
+    backgroundColor: '#EA580C',
+    borderColor: '#EA580C',
+  },
+  headerTrackText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#F97316',
+  },
+  headerTrackTextActive: {
+    color: '#FFFFFF',
+  },
+  proximityFloatingCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: 'rgba(15, 23, 42, 0.94)',
+    borderRadius: 14,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    marginTop: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 6,
+    borderWidth: 1,
+    borderColor: '#334155',
+  },
+  proximityLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    flex: 1,
+  },
+  humanBadge: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#2563EB',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  proximityVehName: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    maxWidth: 90,
+  },
+  proximityCenter: {
+    alignItems: 'center',
+    marginHorizontal: 8,
+  },
+  proximityDistText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#F97316',
+  },
+  proximityEtaText: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#94A3B8',
+  },
+  navigateBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#2563EB',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 10,
+  },
+  navigateBtnText: {
+    fontSize: 11,
+    fontWeight: '700',
     color: '#FFFFFF',
   },
   leftWidgets: {

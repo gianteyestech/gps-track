@@ -14,6 +14,8 @@ interface MapViewerProps {
   mapLayer?: 'osm' | 'satellite' | 'dark';
   autoFit?: boolean;
   forceRecenter?: number;
+  userLocation?: { latitude: number; longitude: number; accuracy?: number } | null;
+  trackMode?: boolean;
 }
 
 const CustomWebView = WebView as any;
@@ -116,6 +118,53 @@ const LEAFLET_STATIC_HTML = `
       border-radius: 4px;
       font-weight: 700;
     }
+    /* Human / My Location Pin Styles */
+    .human-marker-container {
+      width: 44px;
+      height: 56px;
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+      cursor: pointer;
+    }
+    .human-pulse-beacon {
+      position: absolute;
+      top: 18px;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 52px;
+      height: 52px;
+      border-radius: 50%;
+      border: 2.5px solid #2563EB;
+      background: rgba(37, 99, 235, 0.22);
+      animation: humanPulse 2s infinite ease-out;
+      pointer-events: none;
+      z-index: 1;
+    }
+    @keyframes humanPulse {
+      0% { transform: translate(-50%, -50%) scale(0.65); opacity: 1; }
+      100% { transform: translate(-50%, -50%) scale(1.75); opacity: 0; }
+    }
+    .human-pin-icon {
+      position: relative;
+      z-index: 3;
+      filter: drop-shadow(0 4px 8px rgba(0,0,0,0.38));
+    }
+    .human-label-pill {
+      margin-top: 2px;
+      font-size: 9.5px;
+      font-weight: 800;
+      color: #FFFFFF;
+      background: #2563EB;
+      padding: 2px 7px;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(37, 99, 235, 0.4);
+      white-space: nowrap;
+      border: 1px solid #93C5FD;
+      z-index: 4;
+    }
   </style>
 </head>
 <body>
@@ -153,6 +202,9 @@ const LEAFLET_STATIC_HTML = `
     var vehiclesState = {}; // Real-time 60fps physics & dead-reckoning state
     var routePolyline = null;
     var playbackMarker = null;
+    var userMarker = null;
+    var connectingLine = null;
+    var currentUserLocation = null;
     var mapInitialized = false;
     var lastSelectedId = null;
     var userIsInteracting = false;
@@ -257,6 +309,23 @@ const LEAFLET_STATIC_HTML = `
       '</svg>';
     }
 
+    // Human / Pedestrian Location Pin HTML (Replaces generic blue dot)
+    function getHumanPinHtml() {
+      return '<div class="human-marker-container">' +
+        '<div class="human-pulse-beacon"></div>' +
+        '<div class="human-pin-icon">' +
+          '<svg width="34" height="42" viewBox="0 0 34 42" fill="none">' +
+            '<path d="M17 0 C7.6 0 0 7.6 0 17 C0 27 17 42 17 42 C17 42 34 27 34 17 C34 7.6 26.4 0 17 0 Z" fill="#2563EB" stroke="#FFFFFF" stroke-width="1.8"/>' +
+            '<circle cx="17" cy="15.5" r="10.5" fill="#FFFFFF"/>' +
+            '<!-- Stylized Human Figure (Head & Body) -->' +
+            '<circle cx="17" cy="11.5" r="3.2" fill="#2563EB"/>' +
+            '<path d="M10.8 21.5 C10.8 17.2 13.5 16 17 16 C20.5 16 23.2 17.2 23.2 21.5 Z" fill="#2563EB"/>' +
+          '</svg>' +
+        '</div>' +
+        '<div class="human-label-pill">You</div>' +
+      '</div>';
+    }
+
     function createMarkerHtml(m) {
       var isMoving = (m.speedKmh > 0);
       var selectedRing = m.isSelected
@@ -346,6 +415,15 @@ const LEAFLET_STATIC_HTML = `
           }
         }
       });
+
+      // Dynamically stretch connecting route line to target moving vehicle
+      if (connectingLine && currentUserLocation && lastSelectedId && vehiclesState[lastSelectedId]) {
+        var vsTrack = vehiclesState[lastSelectedId];
+        connectingLine.setLatLngs([
+          [currentUserLocation.latitude, currentUserLocation.longitude],
+          [vsTrack.currentLat, vsTrack.currentLng]
+        ]);
+      }
 
       requestAnimationFrame(animateVehicles);
     }
@@ -524,6 +602,66 @@ const LEAFLET_STATIC_HTML = `
           playbackMarker = L.marker(pLatlng, { icon: pIcon }).addTo(map);
         }
       }
+
+      // 6. User Location (Human Pin) & Direct Connecting Path to Vehicle
+      if (data.userLocation && data.userLocation.latitude && data.userLocation.longitude) {
+        currentUserLocation = data.userLocation;
+        var uLatlng = [data.userLocation.latitude, data.userLocation.longitude];
+
+        if (userMarker) {
+          userMarker.setLatLng(uLatlng);
+        } else {
+          var humanIcon = L.divIcon({
+            className: 'custom-marker',
+            html: getHumanPinHtml(),
+            iconSize: [44, 56],
+            iconAnchor: [22, 42],
+            popupAnchor: [0, -42]
+          });
+          userMarker = L.marker(uLatlng, { icon: humanIcon, zIndexOffset: 1000 }).addTo(map);
+        }
+
+        // Draw dynamic connecting line between Human and Target Vehicle
+        if (data.selectedDeviceId && markersMap[data.selectedDeviceId]) {
+          var vLatLng = markersMap[data.selectedDeviceId].getLatLng();
+          var linePts = [uLatlng, [vLatLng.lat, vLatLng.lng]];
+
+          if (connectingLine) {
+            connectingLine.setLatLngs(linePts);
+          } else {
+            connectingLine = L.polyline(linePts, {
+              color: '#EA580C',
+              weight: 3.5,
+              dashArray: '7, 8',
+              opacity: 0.9
+            }).addTo(map);
+          }
+
+          // In Track Mode, dynamically frame both the Human and the Vehicle
+          if (data.trackMode && !userIsInteracting) {
+            map.fitBounds([uLatlng, [vLatLng.lat, vLatLng.lng]], {
+              padding: [70, 70],
+              maxZoom: 17,
+              animate: true
+            });
+          }
+        } else {
+          if (connectingLine) {
+            map.removeLayer(connectingLine);
+            connectingLine = null;
+          }
+        }
+      } else {
+        currentUserLocation = null;
+        if (userMarker) {
+          map.removeLayer(userMarker);
+          userMarker = null;
+        }
+        if (connectingLine) {
+          map.removeLayer(connectingLine);
+          connectingLine = null;
+        }
+      }
     };
 
     // Listen for postMessage from parent
@@ -552,6 +690,8 @@ export function MapViewer({
   mapLayer = 'osm',
   autoFit = true,
   forceRecenter = 0,
+  userLocation = null,
+  trackMode = false,
 }: MapViewerProps) {
   const webViewRef = useRef<any>(null);
   const iframeRef = useRef<any>(null);
@@ -591,7 +731,9 @@ export function MapViewer({
     autoFit,
     selectedDeviceId,
     forceRecenter: forceRecenter > 0,
-  }), [markers, mapLayer, routeCoordinates, playbackPosition, autoFit, selectedDeviceId, forceRecenter]);
+    userLocation,
+    trackMode,
+  }), [markers, mapLayer, routeCoordinates, playbackPosition, autoFit, selectedDeviceId, forceRecenter, userLocation, trackMode]);
 
   // Dispatch payload to existing map instance without ever reloading the container
   const sendUpdate = (data: any) => {
